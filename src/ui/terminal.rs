@@ -98,6 +98,8 @@ impl SshBackend {
 }
 
 impl Backend for SshBackend {
+    type Error = io::Error;
+
     fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
@@ -195,6 +197,18 @@ impl Backend for SshBackend {
 
     fn clear(&mut self) -> io::Result<()> {
         self.write_command(Clear(ClearType::All))
+    }
+
+    fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> io::Result<()> {
+        use ratatui::backend::ClearType as RatatuiClearType;
+        let crossterm_clear_type = match clear_type {
+            RatatuiClearType::All => ClearType::All,
+            RatatuiClearType::AfterCursor => ClearType::FromCursorDown,
+            RatatuiClearType::BeforeCursor => ClearType::FromCursorUp,
+            RatatuiClearType::CurrentLine => ClearType::CurrentLine,
+            RatatuiClearType::UntilNewLine => ClearType::UntilNewLine,
+        };
+        self.write_command(Clear(crossterm_clear_type))
     }
 
     fn size(&self) -> io::Result<Size> {
