@@ -15,6 +15,7 @@ pub enum GameResult {
 pub struct Game {
     position: Chess,
     move_history: Vec<Move>,
+    san_history: Vec<String>,
     result: GameResult,
 }
 
@@ -23,6 +24,7 @@ impl Game {
         Self {
             position: Chess::default(),
             move_history: Vec::new(),
+            san_history: Vec::new(),
             result: GameResult::Ongoing,
         }
     }
@@ -35,6 +37,7 @@ impl Game {
         Ok(Self {
             position,
             move_history: Vec::new(),
+            san_history: Vec::new(),
             result: GameResult::Ongoing,
         })
     }
@@ -44,13 +47,13 @@ impl Game {
             return Err("Game is already over".to_string());
         }
 
-        let san: San = san_str
-            .parse()
-            .map_err(|e| format!("Invalid SAN: {}", e))?;
+        let san: San = san_str.parse().map_err(|e| format!("Invalid SAN: {}", e))?;
 
         let mv = san
             .to_move(&self.position)
             .map_err(|e| format!("Illegal move: {}", e))?;
+
+        let san_notation = San::from_move(&self.position, mv.clone()).to_string();
 
         self.position = self
             .position
@@ -58,6 +61,7 @@ impl Game {
             .play(mv.clone())
             .map_err(|e| format!("{}", e))?;
         self.move_history.push(mv);
+        self.san_history.push(san_notation);
 
         self.update_result();
         Ok(())
@@ -98,12 +102,15 @@ impl Game {
             .find(|m| m.from() == Some(from) && m.to() == to && m.promotion() == promotion)
             .ok_or_else(|| "Illegal move".to_string())?;
 
+        let san_notation = San::from_move(&self.position, mv.clone()).to_string();
+
         self.position = self
             .position
             .clone()
             .play(mv.clone())
             .map_err(|e| format!("{}", e))?;
         self.move_history.push(mv);
+        self.san_history.push(san_notation);
 
         self.update_result();
         Ok(())
@@ -118,12 +125,15 @@ impl Game {
             return Err("Illegal move".to_string());
         }
 
+        let san_notation = San::from_move(&self.position, mv.clone()).to_string();
+
         self.position = self
             .position
             .clone()
             .play(mv.clone())
             .map_err(|e| format!("{}", e))?;
         self.move_history.push(mv);
+        self.san_history.push(san_notation);
 
         self.update_result();
         Ok(())
@@ -196,6 +206,10 @@ impl Game {
 
     pub fn move_history(&self) -> &[Move] {
         &self.move_history
+    }
+
+    pub fn san_history(&self) -> &[String] {
+        &self.san_history
     }
 
     pub fn position(&self) -> &Chess {

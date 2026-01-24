@@ -16,7 +16,11 @@ impl Matchmaking {
     pub fn add_to_queue(&mut self, session_id: SessionId) {
         if !self.queue.contains(&session_id) {
             self.queue.push_back(session_id);
-            tracing::debug!("Added {} to queue. Queue size: {}", session_id, self.queue.len());
+            tracing::debug!(
+                "Added {} to queue. Queue size: {}",
+                session_id,
+                self.queue.len()
+            );
         }
     }
 

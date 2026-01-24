@@ -2,13 +2,14 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use russh::keys::PrivateKey;
 use russh::server::{Auth, Handler, Msg, Server as RusshServer, Session as RusshSession};
 use russh::{Channel, ChannelId, CryptoVec};
-use russh::keys::PrivateKey;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info};
 
 use super::session::{SessionId, TerminalSize};
+use super::session_runner::SessionRunner;
 use crate::server::SessionManager;
 
 pub struct SshServerConfig {
@@ -41,7 +42,8 @@ impl SshServer {
 
         info!("Starting SSH server on {}", config.address);
 
-        self.run_on_address(Arc::new(russh_config), config.address).await?;
+        self.run_on_address(Arc::new(russh_config), config.address)
+            .await?;
 
         Ok(())
     }
@@ -65,6 +67,7 @@ pub struct ConnectionHandler {
     #[allow(dead_code)]
     peer_addr: Option<SocketAddr>,
     session_id: SessionId,
+    username: Option<String>,
     channel_writers: HashMap<ChannelId, mpsc::Sender<Vec<u8>>>,
     terminal_size: TerminalSize,
 }
@@ -75,6 +78,7 @@ impl ConnectionHandler {
             session_manager,
             peer_addr,
             session_id: SessionId::new(),
+            username: None,
             channel_writers: HashMap::new(),
             terminal_size: TerminalSize::default(),
         }
@@ -86,27 +90,31 @@ impl Handler for ConnectionHandler {
 
     async fn auth_none(&mut self, user: &str) -> Result<Auth, Self::Error> {
         debug!("Auth none for user: {}", user);
+        self.username = Some(user.to_string());
         Ok(Auth::Accept)
     }
 
     async fn auth_password(&mut self, user: &str, _password: &str) -> Result<Auth, Self::Error> {
         debug!("Auth password for user: {}", user);
+        self.username = Some(user.to_string());
         Ok(Auth::Accept)
     }
 
     async fn auth_publickey_offered(
         &mut self,
-        _user: &str,
+        user: &str,
         _public_key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
+        self.username = Some(user.to_string());
         Ok(Auth::Accept)
     }
 
     async fn auth_publickey(
         &mut self,
-        _user: &str,
+        user: &str,
         _public_key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
+        self.username = Some(user.to_string());
         Ok(Auth::Accept)
     }
 
@@ -156,34 +164,45 @@ impl Handler for ConnectionHandler {
             width: self.terminal_size.width,
             height: self.terminal_size.height,
         };
+        let username = self.username.clone().unwrap_or_else(|| "guest".to_string());
 
         let handle = session.handle();
-        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(256);
-        self.channel_writers.insert(channel, tx);
+        let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>(256);
+        let (output_tx, mut output_rx) = mpsc::channel::<Vec<u8>>(256);
+
+        self.channel_writers.insert(channel, input_tx);
 
         tokio::spawn(async move {
-            let mut manager = session_manager.write().await;
-            manager.add_session(session_id, terminal_size);
-            drop(manager);
-
-            while let Some(data) = rx.recv().await {
-                if let Some(app_response) = process_input(&session_manager, session_id, &data).await
-                {
-                    let _ = handle.data(channel, CryptoVec::from(app_response)).await;
-                }
+            while let Some(data) = output_rx.recv().await {
+                let _ = handle.data(channel, CryptoVec::from(data)).await;
             }
-
-            let mut manager = session_manager.write().await;
-            manager.remove_session(session_id);
         });
 
-        let welcome = format!(
-            "\x1b[2J\x1b[H\r\n  Welcome to CheSSH!\r\n\r\n  Session: {}\r\n  Terminal: {}x{}\r\n\r\n  Type 'help' for commands.\r\n\r\n> ",
-            self.session_id,
-            self.terminal_size.width,
-            self.terminal_size.height
-        );
-        let _ = session.data(channel, CryptoVec::from(welcome.as_bytes().to_vec()));
+        let width = terminal_size.width as u16;
+        let height = terminal_size.height as u16;
+
+        tokio::spawn(async move {
+            {
+                let mut manager = session_manager.write().await;
+                manager.add_session(session_id, terminal_size);
+            }
+
+            let runner = SessionRunner::new(
+                session_id,
+                session_manager.clone(),
+                input_rx,
+                output_tx,
+                width,
+                height,
+            );
+
+            runner.run(username).await;
+
+            {
+                let mut manager = session_manager.write().await;
+                manager.remove_session(session_id);
+            }
+        });
 
         Ok(())
     }
@@ -217,10 +236,6 @@ impl Handler for ConnectionHandler {
 
         if data == b"\x03" {
             let _ = session.close(channel);
-        } else if data == b"\r" || data == b"\n" {
-            let _ = session.data(channel, CryptoVec::from("\r\n> ".as_bytes().to_vec()));
-        } else {
-            let _ = session.data(channel, CryptoVec::from(data.to_vec()));
         }
 
         Ok(())
@@ -245,12 +260,4 @@ impl Handler for ConnectionHandler {
         let _ = session.close(channel);
         Ok(())
     }
-}
-
-async fn process_input(
-    _session_manager: &Arc<RwLock<SessionManager>>,
-    _session_id: SessionId,
-    _data: &[u8],
-) -> Option<Vec<u8>> {
-    None
 }

@@ -14,9 +14,7 @@ const DEFAULT_PORT: u16 = 2222;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .init();
+    FmtSubscriber::builder().with_max_level(Level::INFO).init();
 
     info!("CheSSH - SSH Chess Server");
     info!("Generating host key...");
