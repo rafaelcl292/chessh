@@ -53,12 +53,12 @@ impl Game {
             .to_move(&self.position)
             .map_err(|e| format!("Illegal move: {}", e))?;
 
-        let san_notation = San::from_move(&self.position, mv.clone()).to_string();
+        let san_notation = San::from_move(&self.position, mv).to_string();
 
         self.position = self
             .position
             .clone()
-            .play(mv.clone())
+            .play(mv)
             .map_err(|e| format!("{}", e))?;
         self.move_history.push(mv);
         self.san_history.push(san_notation);
@@ -102,12 +102,12 @@ impl Game {
             .find(|m| m.from() == Some(from) && m.to() == to && m.promotion() == promotion)
             .ok_or_else(|| "Illegal move".to_string())?;
 
-        let san_notation = San::from_move(&self.position, mv.clone()).to_string();
+        let san_notation = San::from_move(&self.position, mv).to_string();
 
         self.position = self
             .position
             .clone()
-            .play(mv.clone())
+            .play(mv)
             .map_err(|e| format!("{}", e))?;
         self.move_history.push(mv);
         self.san_history.push(san_notation);
@@ -125,12 +125,12 @@ impl Game {
             return Err("Illegal move".to_string());
         }
 
-        let san_notation = San::from_move(&self.position, mv.clone()).to_string();
+        let san_notation = San::from_move(&self.position, mv).to_string();
 
         self.position = self
             .position
             .clone()
-            .play(mv.clone())
+            .play(mv)
             .map_err(|e| format!("{}", e))?;
         self.move_history.push(mv);
         self.san_history.push(san_notation);
@@ -172,7 +172,7 @@ impl Game {
     }
 
     pub fn is_legal(&self, mv: &Move) -> bool {
-        self.position.is_legal(mv.clone())
+        self.position.is_legal(*mv)
     }
 
     pub fn is_check(&self) -> bool {
@@ -225,7 +225,7 @@ impl Game {
     }
 
     pub fn format_move_san(&self, mv: &Move) -> String {
-        San::from_move(&self.position, mv.clone()).to_string()
+        San::from_move(&self.position, *mv).to_string()
     }
 }
 

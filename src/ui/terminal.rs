@@ -67,7 +67,7 @@ impl SshBackend {
     fn write_command<C: crossterm::Command>(&mut self, cmd: C) -> io::Result<()> {
         let mut buf = String::new();
         if cmd.write_ansi(&mut buf).is_err() {
-            return Err(io::Error::new(io::ErrorKind::Other, "Failed to write ANSI"));
+            return Err(io::Error::other("Failed to write ANSI"));
         }
         self.writer.write_all(buf.as_bytes())
     }

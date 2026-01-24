@@ -319,7 +319,7 @@ impl SessionRunner {
                     }
                 }
                 Err(e) => {
-                    app.set_status(Some(format!("{}", e)));
+                    app.set_status(Some(e.to_string()));
                 }
             }
         }

@@ -261,10 +261,9 @@ impl App {
 
                 if let Some(game) = &mut self.game {
                     let san_input = Self::normalize_san(&input);
-                    if game.play_san(&san_input).is_ok() {
-                        self.selected_square = None;
-                        self.status_message = None;
-                    } else if game.play_uci(&input.to_lowercase()).is_ok() {
+                    if game.play_san(&san_input).is_ok()
+                        || game.play_uci(&input.to_lowercase()).is_ok()
+                    {
                         self.selected_square = None;
                         self.status_message = None;
                     } else {
