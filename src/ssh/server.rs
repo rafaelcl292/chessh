@@ -64,8 +64,6 @@ impl RusshServer for SshServer {
 
 pub struct ConnectionHandler {
     session_manager: Arc<RwLock<SessionManager>>,
-    #[allow(dead_code)]
-    peer_addr: Option<SocketAddr>,
     session_id: SessionId,
     username: Option<String>,
     channel_writers: HashMap<ChannelId, mpsc::Sender<Vec<u8>>>,
@@ -73,10 +71,9 @@ pub struct ConnectionHandler {
 }
 
 impl ConnectionHandler {
-    fn new(session_manager: Arc<RwLock<SessionManager>>, peer_addr: Option<SocketAddr>) -> Self {
+    fn new(session_manager: Arc<RwLock<SessionManager>>, _peer_addr: Option<SocketAddr>) -> Self {
         Self {
             session_manager,
-            peer_addr,
             session_id: SessionId::new(),
             username: None,
             channel_writers: HashMap::new(),

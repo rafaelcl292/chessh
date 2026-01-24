@@ -7,8 +7,8 @@ static SPRITES: OnceLock<SpriteCache> = OnceLock::new();
 
 const SPRITE_WIDTH: u32 = 10;
 const SPRITE_HEIGHT: u32 = 10;
-const SPRITES_PER_ROW: u32 = 7;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub enum SpriteRow {
     Brown = 0,
