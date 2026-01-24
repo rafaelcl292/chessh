@@ -115,8 +115,7 @@ impl SessionRunner {
         }
 
         if let Some(game_id) = current_game_id {
-            let mut manager = self.session_manager.write().await;
-            manager.end_game(game_id);
+            self.handle_disconnect(game_id).await;
         }
 
         let _ = terminal.clear();
@@ -399,6 +398,27 @@ impl SessionRunner {
                 app.show_game_over(GameOverReason::YouLose("You resigned".to_string()));
                 *current_game_id = None;
             }
+        }
+    }
+
+    async fn handle_disconnect(&self, game_id: u64) {
+        let mut manager = self.session_manager.write().await;
+
+        if let Some(game_session) = manager.get_game(game_id) {
+            let opponent_id = game_session.get_opponent(self.session_id);
+            drop(manager);
+
+            if let Some(opp_id) = opponent_id {
+                let manager = self.session_manager.read().await;
+                if let Some(tx) = manager.get_game_event_tx(opp_id) {
+                    let _ = tx.send(GameEvent::OpponentDisconnected).await;
+                }
+            }
+
+            let mut manager = self.session_manager.write().await;
+            manager.end_game(game_id);
+        } else {
+            manager.end_game(game_id);
         }
     }
 

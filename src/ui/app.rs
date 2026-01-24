@@ -281,8 +281,7 @@ impl App {
                             return AppAction::Quit;
                         }
                         "/back" | "/lobby" => {
-                            self.end_game();
-                            return AppAction::None;
+                            return AppAction::Resign;
                         }
                         _ => {
                             self.status_message = Some("Unknown command".to_string());
