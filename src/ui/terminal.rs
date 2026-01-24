@@ -225,6 +225,12 @@ pub fn parse_input(data: &[u8]) -> InputEvent {
         return InputEvent::Unknown;
     }
 
+    if data.len() >= 5 && data[0] == 0xFF && data[1] == 0xFE {
+        let width = u16::from_be_bytes([data[2], data[3]]);
+        let height = u16::from_be_bytes([data[4], data[5]]);
+        return InputEvent::Resize(width, height);
+    }
+
     match data {
         [0x03] => InputEvent::Key(KeyCode::Char('c'), KeyModifiers::CONTROL),
         [0x04] => InputEvent::Key(KeyCode::Char('d'), KeyModifiers::CONTROL),

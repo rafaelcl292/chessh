@@ -225,7 +225,7 @@ impl Handler for ConnectionHandler {
 
     async fn window_change_request(
         &mut self,
-        _channel: ChannelId,
+        channel: ChannelId,
         col_width: u32,
         row_height: u32,
         _pix_width: u32,
@@ -237,6 +237,21 @@ impl Handler for ConnectionHandler {
             width: col_width,
             height: row_height,
         };
+
+        if let Some(input_tx) = self.channel_writers.get(&channel) {
+            let width = col_width as u16;
+            let height = row_height as u16;
+            let resize_data = vec![
+                0xFF,
+                0xFE,
+                (width >> 8) as u8,
+                (width & 0xFF) as u8,
+                (height >> 8) as u8,
+                (height & 0xFF) as u8,
+            ];
+            let _ = input_tx.send(resize_data).await;
+        }
+
         Ok(())
     }
 

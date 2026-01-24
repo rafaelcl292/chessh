@@ -381,12 +381,7 @@ impl SessionRunner {
         }
     }
 
-    async fn handle_resign(
-        &self,
-        app: &mut App,
-        game_id: u64,
-        current_game_id: &mut Option<u64>,
-    ) {
+    async fn handle_resign(&self, app: &mut App, game_id: u64, current_game_id: &mut Option<u64>) {
         let mut manager = self.session_manager.write().await;
 
         if let Some(game_session) = manager.get_game_mut(game_id) {

@@ -185,6 +185,12 @@ impl App {
                 self.should_quit = true;
                 AppAction::Quit
             }
+            InputEvent::Key(KeyCode::Char(c), modifiers)
+                if modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                    && (c == '+' || c == '-' || c == '=' || c == '_' || c == '^') =>
+            {
+                AppAction::None
+            }
             InputEvent::Key(key, _) => match self.view {
                 AppView::Lobby => self.handle_lobby_input(key),
                 AppView::InQueue => self.handle_queue_input(key),
@@ -413,9 +419,7 @@ impl App {
                 let cursor_y = input_area.y + 1;
                 (cursor_x.min(input_area.right() - 1), cursor_y)
             }
-            AppView::GameOver => {
-                (area.x + area.width / 2, area.y + area.height / 2 + 3)
-            }
+            AppView::GameOver => (area.x + area.width / 2, area.y + area.height / 2 + 3),
         }
     }
 
