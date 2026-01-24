@@ -292,6 +292,28 @@ impl App {
                     return AppAction::None;
                 }
 
+                if let Some(game) = &self.game {
+                    let matching_moves = self.find_matching_san_moves(game.position(), &input);
+
+                    if matching_moves.len() == 1 {
+                        let mv = matching_moves[0];
+                        let san_str = San::from_move(game.position(), mv).to_string();
+
+                        if self.is_multiplayer {
+                            self.clear_highlights();
+                            return AppAction::SubmitMoveText(san_str);
+                        }
+
+                        if let Some(game) = &mut self.game {
+                            if game.play_move(mv).is_ok() {
+                                self.clear_highlights();
+                                self.status_message = None;
+                                return AppAction::None;
+                            }
+                        }
+                    }
+                }
+
                 if self.is_multiplayer {
                     self.clear_highlights();
                     return AppAction::SubmitMoveText(input);
