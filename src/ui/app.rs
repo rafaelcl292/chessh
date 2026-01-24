@@ -18,13 +18,14 @@ pub enum AppView {
     Game,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppAction {
     None,
     JoinQueue,
     LeaveQueue,
     Quit,
     SubmitMove(Square, Square),
+    SubmitMoveText(String),
     Resign,
     OfferDraw,
 }
@@ -38,6 +39,7 @@ pub struct App {
     game: Option<Game>,
     selected_square: Option<Square>,
     is_black_player: bool,
+    is_multiplayer: bool,
     opponent_name: String,
     status_message: Option<String>,
     should_quit: bool,
@@ -54,10 +56,27 @@ impl App {
             game: None,
             selected_square: None,
             is_black_player: false,
+            is_multiplayer: false,
             opponent_name: String::new(),
             status_message: None,
             should_quit: false,
         }
+    }
+
+    pub fn is_my_turn(&self) -> bool {
+        if let Some(game) = &self.game {
+            let current_turn = game.turn();
+            match current_turn {
+                shakmaty::Color::White => !self.is_black_player,
+                shakmaty::Color::Black => self.is_black_player,
+            }
+        } else {
+            false
+        }
+    }
+
+    pub fn is_multiplayer(&self) -> bool {
+        self.is_multiplayer
     }
 
     pub fn view(&self) -> AppView {
@@ -66,6 +85,10 @@ impl App {
 
     pub fn should_quit(&self) -> bool {
         self.should_quit
+    }
+
+    pub fn set_should_quit(&mut self, value: bool) {
+        self.should_quit = value;
     }
 
     pub fn set_online_count(&mut self, count: usize) {
@@ -91,10 +114,19 @@ impl App {
     }
 
     pub fn start_game(&mut self, opponent: String, is_black: bool) {
+        self.start_game_with_mode(opponent, is_black, true)
+    }
+
+    pub fn start_solo_game(&mut self) {
+        self.start_game_with_mode("Computer".to_string(), false, false)
+    }
+
+    fn start_game_with_mode(&mut self, opponent: String, is_black: bool, multiplayer: bool) {
         self.view = AppView::Game;
         self.game = Some(Game::new());
         self.opponent_name = opponent;
         self.is_black_player = is_black;
+        self.is_multiplayer = multiplayer;
         self.selected_square = None;
         self.input_buffer.clear();
         self.status_message = None;
@@ -104,6 +136,7 @@ impl App {
         self.view = AppView::Lobby;
         self.game = None;
         self.selected_square = None;
+        self.is_multiplayer = false;
         self.opponent_name.clear();
         self.input_buffer.clear();
     }
@@ -156,7 +189,7 @@ impl App {
                 match cmd.as_str() {
                     "/play" | "play" | "/p" => AppAction::JoinQueue,
                     "/solo" | "solo" | "/s" => {
-                        self.start_game("Computer".to_string(), false);
+                        self.start_solo_game();
                         AppAction::None
                     }
                     "/quit" | "quit" | "/q" | "exit" => {
@@ -197,6 +230,10 @@ impl App {
                 let input = self.input_buffer.trim().to_string();
                 self.input_buffer.clear();
 
+                if input.is_empty() {
+                    return AppAction::None;
+                }
+
                 if input.starts_with('/') {
                     match input.to_lowercase().as_str() {
                         "/resign" => return AppAction::Resign,
@@ -213,7 +250,16 @@ impl App {
                             self.status_message = Some("Unknown command".to_string());
                         }
                     }
-                } else if let Some(game) = &mut self.game {
+                    self.selected_square = None;
+                    return AppAction::None;
+                }
+
+                if self.is_multiplayer {
+                    self.selected_square = None;
+                    return AppAction::SubmitMoveText(input);
+                }
+
+                if let Some(game) = &mut self.game {
                     let san_input = Self::normalize_san(&input);
                     if game.play_san(&san_input).is_ok() {
                         self.selected_square = None;
@@ -246,7 +292,10 @@ impl App {
                     self.selected_square = Some(sq);
                 } else if input.len() >= 4 {
                     if let Ok(to_sq) = input[2..4].parse::<Square>() {
-                        return AppAction::SubmitMove(sq, to_sq);
+                        self.selected_square = Some(to_sq);
+                        if !self.is_multiplayer {
+                            return AppAction::SubmitMove(sq, to_sq);
+                        }
                     }
                 }
             }

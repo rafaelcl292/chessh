@@ -1,7 +1,31 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 
+use shakmaty::Square;
+
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone)]
+pub enum GameEvent {
+    MatchFound {
+        game_id: u64,
+        opponent_name: String,
+        is_white: bool,
+    },
+    MovePlayed {
+        from: Square,
+        to: Square,
+        promotion: Option<char>,
+    },
+    DrawOffered,
+    DrawAccepted,
+    DrawDeclined,
+    OpponentResigned,
+    OpponentDisconnected,
+    GameEnded {
+        reason: String,
+    },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SessionId(u64);

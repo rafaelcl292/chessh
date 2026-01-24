@@ -169,6 +169,7 @@ impl Handler for ConnectionHandler {
         let handle = session.handle();
         let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>(256);
         let (output_tx, mut output_rx) = mpsc::channel::<Vec<u8>>(256);
+        let (game_event_tx, game_event_rx) = mpsc::channel::<super::session::GameEvent>(64);
 
         self.channel_writers.insert(channel, input_tx);
 
@@ -185,6 +186,8 @@ impl Handler for ConnectionHandler {
             {
                 let mut manager = session_manager.write().await;
                 manager.add_session(session_id, terminal_size);
+                manager.set_username(session_id, username.clone());
+                manager.register_game_event_channel(session_id, game_event_tx);
             }
 
             let runner = SessionRunner::new(
@@ -192,6 +195,7 @@ impl Handler for ConnectionHandler {
                 session_manager.clone(),
                 input_rx,
                 output_tx,
+                game_event_rx,
                 width,
                 height,
             );
@@ -200,7 +204,19 @@ impl Handler for ConnectionHandler {
 
             {
                 let mut manager = session_manager.write().await;
-                manager.remove_session(session_id);
+                if let Some(game_id) = manager.remove_session(session_id) {
+                    if let Some(game_session) = manager.get_game(game_id) {
+                        let opponent_id = game_session.get_opponent(session_id);
+                        if let Some(opp_id) = opponent_id {
+                            if let Some(tx) = manager.get_game_event_tx(opp_id) {
+                                let _ = tx
+                                    .send(super::session::GameEvent::OpponentDisconnected)
+                                    .await;
+                            }
+                        }
+                    }
+                    manager.end_game(game_id);
+                }
             }
         });
 

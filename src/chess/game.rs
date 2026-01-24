@@ -163,6 +163,10 @@ impl Game {
         };
     }
 
+    pub fn set_result(&mut self, result: GameResult) {
+        self.result = result;
+    }
+
     pub fn legal_moves(&self) -> Vec<Move> {
         self.position.legal_moves().into_iter().collect()
     }
