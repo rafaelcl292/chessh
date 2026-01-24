@@ -170,9 +170,10 @@ impl Handler for ConnectionHandler {
 
         self.channel_writers.insert(channel, input_tx);
 
+        let output_handle = handle.clone();
         tokio::spawn(async move {
             while let Some(data) = output_rx.recv().await {
-                let _ = handle.data(channel, CryptoVec::from(data)).await;
+                let _ = output_handle.data(channel, CryptoVec::from(data)).await;
             }
         });
 
@@ -215,6 +216,9 @@ impl Handler for ConnectionHandler {
                     manager.end_game(game_id);
                 }
             }
+
+            let _ = handle.eof(channel).await;
+            let _ = handle.close(channel).await;
         });
 
         Ok(())
