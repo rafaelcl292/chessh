@@ -16,6 +16,14 @@ pub enum AppView {
     Lobby,
     InQueue,
     Game,
+    GameOver,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GameOverReason {
+    YouWin(String),
+    YouLose(String),
+    Draw(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +36,7 @@ pub enum AppAction {
     SubmitMoveText(String),
     Resign,
     OfferDraw,
+    ReturnToLobby,
 }
 
 pub struct App {
@@ -43,6 +52,7 @@ pub struct App {
     opponent_name: String,
     status_message: Option<String>,
     should_quit: bool,
+    game_over_reason: Option<GameOverReason>,
 }
 
 impl App {
@@ -60,6 +70,7 @@ impl App {
             opponent_name: String::new(),
             status_message: None,
             should_quit: false,
+            game_over_reason: None,
         }
     }
 
@@ -132,13 +143,24 @@ impl App {
         self.status_message = None;
     }
 
-    pub fn end_game(&mut self) {
+    pub fn show_game_over(&mut self, reason: GameOverReason) {
+        self.view = AppView::GameOver;
+        self.game_over_reason = Some(reason);
+        self.input_buffer.clear();
+    }
+
+    pub fn return_to_lobby(&mut self) {
         self.view = AppView::Lobby;
         self.game = None;
         self.selected_square = None;
         self.is_multiplayer = false;
         self.opponent_name.clear();
         self.input_buffer.clear();
+        self.game_over_reason = None;
+    }
+
+    pub fn end_game(&mut self) {
+        self.return_to_lobby();
     }
 
     pub fn game(&self) -> Option<&Game> {
@@ -167,6 +189,7 @@ impl App {
                 AppView::Lobby => self.handle_lobby_input(key),
                 AppView::InQueue => self.handle_queue_input(key),
                 AppView::Game => self.handle_game_input(key),
+                AppView::GameOver => self.handle_game_over_input(key),
             },
             _ => AppAction::None,
         }
@@ -282,6 +305,20 @@ impl App {
         }
     }
 
+    fn handle_game_over_input(&mut self, key: KeyCode) -> AppAction {
+        match key {
+            KeyCode::Enter => {
+                self.return_to_lobby();
+                AppAction::ReturnToLobby
+            }
+            KeyCode::Char('q') => {
+                self.should_quit = true;
+                AppAction::Quit
+            }
+            _ => AppAction::None,
+        }
+    }
+
     fn try_parse_move(&mut self) -> AppAction {
         let input = self.input_buffer.trim().to_lowercase();
 
@@ -326,6 +363,7 @@ impl App {
         match self.view {
             AppView::Lobby | AppView::InQueue => self.render_lobby(area, buf),
             AppView::Game => self.render_game(area, buf),
+            AppView::GameOver => self.render_game_over(area, buf),
         }
     }
 
@@ -374,6 +412,9 @@ impl App {
                     input_area.x + 1 + prefix_len as u16 + self.input_buffer.len() as u16;
                 let cursor_y = input_area.y + 1;
                 (cursor_x.min(input_area.right() - 1), cursor_y)
+            }
+            AppView::GameOver => {
+                (area.x + area.width / 2, area.y + area.height / 2 + 3)
             }
         }
     }
@@ -455,6 +496,61 @@ impl App {
                 .block(Block::default().borders(Borders::ALL).title("Move"));
             input.render(chunks[1], buf);
         }
+    }
+
+    fn render_game_over(&self, area: Rect, buf: &mut Buffer) {
+        use ratatui::layout::Alignment;
+        use ratatui::style::{Color, Modifier, Style};
+        use ratatui::text::{Line, Span};
+
+        let (title, reason, title_color) = match &self.game_over_reason {
+            Some(GameOverReason::YouWin(reason)) => {
+                ("🎉 YOU WIN! 🎉".to_string(), reason.clone(), Color::Green)
+            }
+            Some(GameOverReason::YouLose(reason)) => {
+                ("YOU LOSE".to_string(), reason.clone(), Color::Red)
+            }
+            Some(GameOverReason::Draw(reason)) => {
+                ("DRAW".to_string(), reason.clone(), Color::Yellow)
+            }
+            None => ("Game Over".to_string(), String::new(), Color::White),
+        };
+
+        let lines: Vec<Line> = vec![
+            Line::from(""),
+            Line::from(""),
+            Line::from(Span::styled(
+                "♔ Game Over ♚",
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(""),
+            Line::from(""),
+            Line::from(Span::styled(
+                title,
+                Style::default()
+                    .fg(title_color)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(reason, Style::default().fg(title_color))),
+            Line::from(""),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Press ENTER to return to lobby",
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Press Q to quit",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+
+        let paragraph = Paragraph::new(lines)
+            .block(Block::default().borders(Borders::ALL))
+            .alignment(Alignment::Center);
+
+        paragraph.render(area, buf);
     }
 }
 
