@@ -13,6 +13,8 @@ const LAST_MOVE_SQUARE: Color = Color::Rgb(205, 210, 106);
 const LEGAL_MOVE_LIGHT: Color = Color::Rgb(170, 162, 131);
 const LEGAL_MOVE_DARK: Color = Color::Rgb(141, 111, 81);
 const CHECK_SQUARE: Color = Color::Rgb(220, 80, 80);
+const CANDIDATE_ORIGIN_LIGHT: Color = Color::Rgb(180, 180, 130);
+const CANDIDATE_ORIGIN_DARK: Color = Color::Rgb(150, 130, 90);
 
 const WHITE_PIECE: Color = Color::Rgb(255, 255, 255);
 const BLACK_PIECE: Color = Color::Rgb(0, 0, 0);
@@ -22,6 +24,7 @@ pub struct BoardWidget<'a> {
     selected_square: Option<Square>,
     last_move: Option<(Square, Square)>,
     legal_moves: Vec<Square>,
+    candidate_origins: Vec<Square>,
     flipped: bool,
 }
 
@@ -32,6 +35,7 @@ impl<'a> BoardWidget<'a> {
             selected_square: None,
             last_move: None,
             legal_moves: Vec::new(),
+            candidate_origins: Vec::new(),
             flipped: false,
         }
     }
@@ -49,6 +53,12 @@ impl<'a> BoardWidget<'a> {
         } else {
             self.legal_moves.clear();
         }
+        self
+    }
+
+    pub fn highlights(mut self, origins: Vec<Square>, destinations: Vec<Square>) -> Self {
+        self.candidate_origins = origins;
+        self.legal_moves = destinations;
         self
     }
 
@@ -157,6 +167,14 @@ impl Widget for BoardWidget<'_> {
                     if square == from || square == to {
                         bg_color = LAST_MOVE_SQUARE;
                     }
+                }
+
+                if self.candidate_origins.contains(&square) {
+                    bg_color = if is_light {
+                        CANDIDATE_ORIGIN_LIGHT
+                    } else {
+                        CANDIDATE_ORIGIN_DARK
+                    };
                 }
 
                 if self.legal_moves.contains(&square) {

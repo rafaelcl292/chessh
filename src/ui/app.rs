@@ -3,7 +3,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use ratatui::Frame;
-use shakmaty::Square;
+use shakmaty::san::San;
+use shakmaty::{Move, Position, Role, Square};
 
 use crate::chess::Game;
 
@@ -47,6 +48,8 @@ pub struct App {
     username: String,
     game: Option<Game>,
     selected_square: Option<Square>,
+    highlight_origins: Vec<Square>,
+    highlight_destinations: Vec<Square>,
     is_black_player: bool,
     is_multiplayer: bool,
     opponent_name: String,
@@ -65,6 +68,8 @@ impl App {
             username,
             game: None,
             selected_square: None,
+            highlight_origins: Vec::new(),
+            highlight_destinations: Vec::new(),
             is_black_player: false,
             is_multiplayer: false,
             opponent_name: String::new(),
@@ -252,7 +257,11 @@ impl App {
             }
             KeyCode::Backspace => {
                 self.input_buffer.pop();
-                self.selected_square = None;
+                if self.input_buffer.is_empty() {
+                    self.clear_highlights();
+                } else {
+                    self.try_parse_move();
+                }
                 AppAction::None
             }
             KeyCode::Enter => {
@@ -279,12 +288,12 @@ impl App {
                             self.status_message = Some("Unknown command".to_string());
                         }
                     }
-                    self.selected_square = None;
+                    self.clear_highlights();
                     return AppAction::None;
                 }
 
                 if self.is_multiplayer {
-                    self.selected_square = None;
+                    self.clear_highlights();
                     return AppAction::SubmitMoveText(input);
                 }
 
@@ -293,18 +302,18 @@ impl App {
                     if game.play_san(&san_input).is_ok()
                         || game.play_uci(&input.to_lowercase()).is_ok()
                     {
-                        self.selected_square = None;
+                        self.clear_highlights();
                         self.status_message = None;
                     } else {
                         self.status_message = Some(format!("Invalid move: {}", input));
                     }
                 }
-                self.selected_square = None;
+                self.clear_highlights();
                 AppAction::None
             }
             KeyCode::Esc => {
                 self.input_buffer.clear();
-                self.selected_square = None;
+                self.clear_highlights();
                 AppAction::None
             }
             _ => AppAction::None,
@@ -326,23 +335,146 @@ impl App {
     }
 
     fn try_parse_move(&mut self) -> AppAction {
-        let input = self.input_buffer.trim().to_lowercase();
+        let input = self.input_buffer.trim();
 
-        if input.len() >= 2 {
-            if let Ok(sq) = input[..2].parse::<Square>() {
-                if input.len() == 2 {
-                    self.selected_square = Some(sq);
-                } else if input.len() >= 4 {
-                    if let Ok(to_sq) = input[2..4].parse::<Square>() {
-                        self.selected_square = Some(to_sq);
-                        if !self.is_multiplayer {
-                            return AppAction::SubmitMove(sq, to_sq);
+        if input.is_empty() {
+            self.clear_highlights();
+            return AppAction::None;
+        }
+
+        if let Some(game) = &self.game {
+            let matching_moves = self.find_matching_san_moves(game.position(), input);
+
+            if !matching_moves.is_empty() {
+                self.update_highlights_from_moves(&matching_moves);
+            } else {
+                let input_lower = input.to_lowercase();
+                if input_lower.len() >= 2 {
+                    if let Ok(sq) = input_lower[..2].parse::<Square>() {
+                        self.selected_square = Some(sq);
+                        self.highlight_origins.clear();
+                        self.highlight_destinations.clear();
+
+                        if input_lower.len() >= 4 {
+                            if let Ok(to_sq) = input_lower[2..4].parse::<Square>() {
+                                self.highlight_origins = vec![sq];
+                                self.highlight_destinations = vec![to_sq];
+                                if !self.is_multiplayer {
+                                    return AppAction::SubmitMove(sq, to_sq);
+                                }
+                            }
                         }
                     }
                 }
             }
         }
         AppAction::None
+    }
+
+    fn find_matching_san_moves(&self, position: &shakmaty::Chess, input: &str) -> Vec<Move> {
+        let normalized = Self::normalize_san(input);
+        let legal_moves: Vec<Move> = position.legal_moves().into_iter().collect();
+
+        if normalized.is_empty() {
+            return Vec::new();
+        }
+
+        let first_char = normalized.chars().next().unwrap();
+
+        if normalized == "O-O" || normalized == "O-O-O" {
+            if let Ok(san) = normalized.parse::<San>() {
+                return legal_moves
+                    .into_iter()
+                    .filter(|m| san.matches(*m))
+                    .collect();
+            }
+            return Vec::new();
+        }
+
+        if first_char == 'O' || first_char == '0' {
+            let partial = normalized.to_uppercase();
+            return legal_moves
+                .into_iter()
+                .filter(|m| {
+                    let san_str = San::from_move(position, *m).to_string();
+                    san_str.starts_with(&partial)
+                        || san_str
+                            .replace('-', "")
+                            .starts_with(&partial.replace('-', ""))
+                })
+                .collect();
+        }
+
+        let role = match first_char {
+            'N' => Some(Role::Knight),
+            'B' => Some(Role::Bishop),
+            'R' => Some(Role::Rook),
+            'Q' => Some(Role::Queen),
+            'K' => Some(Role::King),
+            _ => None,
+        };
+
+        if let Some(piece_role) = role {
+            let rest = &normalized[1..];
+            return legal_moves
+                .into_iter()
+                .filter(|m| {
+                    if m.role() != piece_role {
+                        return false;
+                    }
+                    if rest.is_empty() {
+                        return true;
+                    }
+                    let san_str = San::from_move(position, *m).to_string();
+                    san_str[1..].starts_with(rest)
+                })
+                .collect();
+        }
+
+        let first_lower = first_char.to_ascii_lowercase();
+        if first_lower.is_ascii_lowercase() && ('a'..='h').contains(&first_lower) {
+            return legal_moves
+                .into_iter()
+                .filter(|m| {
+                    if m.role() != Role::Pawn {
+                        return false;
+                    }
+                    let san_str = San::from_move(position, *m).to_string();
+                    let san_lower = san_str.to_lowercase();
+                    san_lower.starts_with(&normalized.to_lowercase())
+                })
+                .collect();
+        }
+
+        Vec::new()
+    }
+
+    fn update_highlights_from_moves(&mut self, moves: &[Move]) {
+        self.highlight_origins.clear();
+        self.highlight_destinations.clear();
+        self.selected_square = None;
+
+        for m in moves {
+            if let Some(from) = m.from() {
+                if !self.highlight_origins.contains(&from) {
+                    self.highlight_origins.push(from);
+                }
+            }
+            let to = m.to();
+            if !self.highlight_destinations.contains(&to) {
+                self.highlight_destinations.push(to);
+            }
+        }
+
+        if self.highlight_origins.len() == 1 && self.highlight_destinations.len() == 1 {
+            self.selected_square = Some(self.highlight_origins[0]);
+        }
+    }
+
+    fn clear_highlights(&mut self) {
+        self.selected_square = None;
+        self.highlight_origins.clear();
+        self.highlight_destinations.clear();
     }
 
     fn normalize_san(input: &str) -> String {
@@ -464,6 +596,10 @@ impl App {
             let mut view = GameView::new(game.position(), game.san_history())
                 .players(white_name, black_name)
                 .selected(self.selected_square)
+                .highlights(
+                    self.highlight_origins.clone(),
+                    self.highlight_destinations.clone(),
+                )
                 .perspective(self.is_black_player);
 
             if let Some((from, to)) = last_move {

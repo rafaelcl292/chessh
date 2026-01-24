@@ -15,6 +15,8 @@ pub struct GameView<'a> {
     selected_square: Option<shakmaty::Square>,
     last_move: Option<(shakmaty::Square, shakmaty::Square)>,
     is_black_perspective: bool,
+    highlight_origins: Vec<shakmaty::Square>,
+    highlight_destinations: Vec<shakmaty::Square>,
 }
 
 fn captured_pieces(position: &Chess, color: shakmaty::Color) -> Vec<Role> {
@@ -67,6 +69,8 @@ impl<'a> GameView<'a> {
             selected_square: None,
             last_move: None,
             is_black_perspective: false,
+            highlight_origins: Vec::new(),
+            highlight_destinations: Vec::new(),
         }
     }
 
@@ -95,6 +99,16 @@ impl<'a> GameView<'a> {
         self.is_black_perspective = is_black;
         self
     }
+
+    pub fn highlights(
+        mut self,
+        origins: Vec<shakmaty::Square>,
+        destinations: Vec<shakmaty::Square>,
+    ) -> Self {
+        self.highlight_origins = origins;
+        self.highlight_destinations = destinations;
+        self
+    }
 }
 
 impl Widget for GameView<'_> {
@@ -109,7 +123,8 @@ impl Widget for GameView<'_> {
 
         let mut board = BoardWidget::new(self.position)
             .selected(self.selected_square)
-            .flipped(self.is_black_perspective);
+            .flipped(self.is_black_perspective)
+            .highlights(self.highlight_origins, self.highlight_destinations);
 
         if let Some((from, to)) = self.last_move {
             board = board.last_move(from, to);
