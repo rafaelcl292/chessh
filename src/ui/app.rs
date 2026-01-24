@@ -386,7 +386,11 @@ impl App {
                                 }
                             }
                         }
+                    } else {
+                        self.clear_highlights();
                     }
+                } else {
+                    self.clear_highlights();
                 }
             }
         }
