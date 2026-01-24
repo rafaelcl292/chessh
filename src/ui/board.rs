@@ -4,6 +4,8 @@ use ratatui::style::Color;
 use ratatui::widgets::Widget;
 use shakmaty::{Chess, File, Position, Rank, Square};
 
+use super::sprites::{get_sprite, render_sprite_half_blocks};
+
 const LIGHT_SQUARE: Color = Color::Rgb(240, 217, 181);
 const DARK_SQUARE: Color = Color::Rgb(181, 136, 99);
 const SELECTED_SQUARE: Color = Color::Rgb(130, 151, 105);
@@ -90,11 +92,26 @@ impl<'a> BoardWidget<'a> {
 
 impl Widget for BoardWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let square_width = 4u16;
-        let square_height = 2u16;
+        let sprite_square_width = 10u16;
+        let sprite_square_height = 5u16;
 
-        let board_width = 8 * square_width + 2;
-        let board_height = 8 * square_height + 1;
+        let sprite_board_width = 8 * sprite_square_width + 2;
+        let sprite_board_height = 8 * sprite_square_height + 1;
+
+        let use_sprites = area.width >= sprite_board_width && area.height >= sprite_board_height;
+
+        let (square_width, square_height, board_width, board_height) = if use_sprites {
+            (
+                sprite_square_width,
+                sprite_square_height,
+                sprite_board_width,
+                sprite_board_height,
+            )
+        } else {
+            let sw = 4u16;
+            let sh = 2u16;
+            (sw, sh, 8 * sw + 2, 8 * sh + 1)
+        };
 
         if area.width < board_width || area.height < board_height {
             return;
@@ -166,20 +183,35 @@ impl Widget for BoardWidget<'_> {
                 }
 
                 if let Some(piece) = self.position.board().piece_at(square) {
-                    let piece_char = Self::piece_char(piece.role, piece.color);
-                    let piece_color = match piece.color {
-                        shakmaty::Color::White => WHITE_PIECE,
-                        shakmaty::Color::Black => BLACK_PIECE,
-                    };
+                    if use_sprites {
+                        if let Some(sprite) = get_sprite(piece.color, piece.role) {
+                            let half_blocks = render_sprite_half_blocks(sprite, bg_color);
+                            for (row_idx, row) in half_blocks.iter().enumerate() {
+                                for (col_idx, hb) in row.iter().enumerate() {
+                                    let px = x + col_idx as u16;
+                                    let py = y + row_idx as u16;
+                                    if px < area.x + area.width && py < area.y + area.height {
+                                        buf[(px, py)].set_char(hb.char).set_fg(hb.fg).set_bg(hb.bg);
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        let piece_char = Self::piece_char(piece.role, piece.color);
+                        let piece_color = match piece.color {
+                            shakmaty::Color::White => WHITE_PIECE,
+                            shakmaty::Color::Black => BLACK_PIECE,
+                        };
 
-                    let px = x + square_width / 2;
-                    let py = y + square_height / 2;
+                        let px = x + square_width / 2;
+                        let py = y + square_height / 2;
 
-                    if px < area.x + area.width && py < area.y + area.height {
-                        buf[(px, py)]
-                            .set_char(piece_char)
-                            .set_fg(piece_color)
-                            .set_bg(bg_color);
+                        if px < area.x + area.width && py < area.y + area.height {
+                            buf[(px, py)]
+                                .set_char(piece_char)
+                                .set_fg(piece_color)
+                                .set_bg(bg_color);
+                        }
                     }
                 }
             }

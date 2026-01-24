@@ -10,6 +10,7 @@ use tracing_subscriber::FmtSubscriber;
 
 use chessh::server::SessionManager;
 use chessh::ssh::{SshServer, SshServerConfig};
+use chessh::ui::init_sprites;
 
 const DEFAULT_PORT: u16 = 2222;
 
@@ -18,6 +19,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     FmtSubscriber::builder().with_max_level(Level::INFO).init();
 
     info!("CheSSH - SSH Chess Server");
+    info!("Loading sprite assets...");
+    init_sprites();
+    info!("Sprites loaded successfully");
+
     info!("Generating host key...");
 
     let host_key = PrivateKey::random(&mut OsRng, russh::keys::Algorithm::Ed25519)
