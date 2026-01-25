@@ -1,6 +1,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Widget};
 use shakmaty::{Chess, Position, Role};
 
@@ -17,6 +18,9 @@ pub struct GameView<'a> {
     is_black_perspective: bool,
     highlight_origins: Vec<shakmaty::Square>,
     highlight_destinations: Vec<shakmaty::Square>,
+    input_buffer: String,
+    is_my_turn: bool,
+    is_multiplayer: bool,
 }
 
 fn captured_pieces(position: &Chess, color: shakmaty::Color) -> Vec<Role> {
@@ -71,6 +75,9 @@ impl<'a> GameView<'a> {
             is_black_perspective: false,
             highlight_origins: Vec::new(),
             highlight_destinations: Vec::new(),
+            input_buffer: String::new(),
+            is_my_turn: true,
+            is_multiplayer: false,
         }
     }
 
@@ -109,22 +116,125 @@ impl<'a> GameView<'a> {
         self.highlight_destinations = destinations;
         self
     }
+
+    pub fn input(mut self, buffer: String, is_my_turn: bool, is_multiplayer: bool) -> Self {
+        self.input_buffer = buffer;
+        self.is_my_turn = is_my_turn;
+        self.is_multiplayer = is_multiplayer;
+        self
+    }
+
+    pub fn get_input_position(&self, area: Rect) -> (u16, u16) {
+        let help_width = 18u16;
+        let side_width = 26u16;
+        let min_board_width = 34u16;
+
+        let (has_help, has_side, _, _) =
+            Self::compute_layout_widths(area, help_width, side_width, min_board_width);
+
+        let mut constraints = Vec::new();
+        if has_help {
+            constraints.push(Constraint::Length(help_width));
+        }
+        constraints.push(Constraint::Min(min_board_width));
+        if has_side {
+            constraints.push(Constraint::Length(side_width));
+        }
+
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(constraints)
+            .split(area);
+
+        if !has_side {
+            return (area.x + 1, area.y + area.height.saturating_sub(1));
+        }
+
+        let side_panel = if has_help { chunks[2] } else { chunks[1] };
+
+        let side_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(2),
+                Constraint::Min(5),
+                Constraint::Length(2),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+            ])
+            .split(side_panel);
+
+        let input_area = side_chunks[6];
+        let prefix_len = 3u16;
+        let cursor_x = input_area.x + prefix_len + self.input_buffer.len() as u16;
+        let cursor_y = input_area.y + 1;
+
+        (cursor_x.min(input_area.right().saturating_sub(2)), cursor_y)
+    }
+
+    fn compute_layout_widths(
+        area: Rect,
+        help_width: u16,
+        side_width: u16,
+        min_board_width: u16,
+    ) -> (bool, bool, u16, u16) {
+        let total = area.width;
+        let full_width = help_width + min_board_width + side_width;
+        let no_help_width = min_board_width + side_width;
+
+        if total >= full_width {
+            (true, true, help_width, side_width)
+        } else if total >= no_help_width {
+            (false, true, 0, side_width)
+        } else {
+            (false, false, 0, 0)
+        }
+    }
 }
 
 impl Widget for GameView<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let help_width = 18u16;
+        let side_width = 26u16;
+        let min_board_width = 34u16;
+
+        let (has_help, has_side, _, _) =
+            Self::compute_layout_widths(area, help_width, side_width, min_board_width);
+
+        let mut constraints = Vec::new();
+        if has_help {
+            constraints.push(Constraint::Length(help_width));
+        }
+        constraints.push(Constraint::Min(min_board_width));
+        if has_side {
+            constraints.push(Constraint::Length(side_width));
+        }
+
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(40), Constraint::Length(30)])
+            .constraints(constraints)
             .split(area);
 
-        let board_area = chunks[0];
-        let side_panel = chunks[1];
+        let (help_panel, board_area, side_panel) = if has_help && has_side {
+            (Some(chunks[0]), chunks[1], Some(chunks[2]))
+        } else if has_side {
+            (None, chunks[0], Some(chunks[1]))
+        } else {
+            (None, chunks[0], None)
+        };
+
+        if let Some(help_area) = help_panel {
+            self.render_help_panel(help_area, buf);
+        }
 
         let mut board = BoardWidget::new(self.position)
             .selected(self.selected_square)
             .flipped(self.is_black_perspective)
-            .highlights(self.highlight_origins, self.highlight_destinations);
+            .highlights(
+                self.highlight_origins.clone(),
+                self.highlight_destinations.clone(),
+            );
 
         if let Some((from, to)) = self.last_move {
             board = board.last_move(from, to);
@@ -132,17 +242,49 @@ impl Widget for GameView<'_> {
 
         board.render(board_area, buf);
 
+        if let Some(side_area) = side_panel {
+            self.render_side_panel(side_area, buf);
+        }
+    }
+}
+
+impl GameView<'_> {
+    fn render_help_panel(&self, area: Rect, buf: &mut Buffer) {
+        let help_lines = vec![
+            Line::from(Span::styled(
+                "Commands",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled("/resign", Style::default().fg(Color::Cyan))),
+            Line::from("  Forfeit game"),
+            Line::from(""),
+            Line::from(Span::styled("/draw", Style::default().fg(Color::Cyan))),
+            Line::from("  Offer/accept"),
+            Line::from("  a draw"),
+            Line::from(""),
+            Line::from(Span::styled("/quit", Style::default().fg(Color::Cyan))),
+            Line::from("  Disconnect"),
+        ];
+
+        let help_widget =
+            Paragraph::new(help_lines).block(Block::default().borders(Borders::RIGHT));
+        help_widget.render(area, buf);
+    }
+
+    fn render_side_panel(&self, area: Rect, buf: &mut Buffer) {
         let side_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
                 Constraint::Length(2),
-                Constraint::Min(8),
+                Constraint::Min(5),
                 Constraint::Length(2),
                 Constraint::Length(3),
                 Constraint::Length(3),
+                Constraint::Length(3),
             ])
-            .split(side_panel);
+            .split(area);
 
         let (top_color, bottom_color) = if self.is_black_perspective {
             (shakmaty::Color::White, shakmaty::Color::Black)
@@ -218,7 +360,7 @@ impl Widget for GameView<'_> {
             .block(Block::default().borders(Borders::ALL));
         bottom_player_widget.render(side_chunks[4], buf);
 
-        if let Some(status) = self.status_message {
+        if let Some(ref status) = self.status_message {
             let status_style = if status.contains("Check") {
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
             } else if status.contains("Checkmate") || status.contains("wins") {
@@ -229,10 +371,22 @@ impl Widget for GameView<'_> {
                 Style::default().fg(Color::Yellow)
             };
 
-            let status_widget = Paragraph::new(status)
+            let status_widget = Paragraph::new(status.as_str())
                 .style(status_style)
                 .block(Block::default().borders(Borders::ALL).title("Status"));
             status_widget.render(side_chunks[5], buf);
         }
+
+        let input_prefix = if self.is_my_turn { "> " } else { "· " };
+        let input_text = format!("{}{}", input_prefix, self.input_buffer);
+        let input_style = if self.is_my_turn {
+            Style::default()
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let input_widget = Paragraph::new(input_text)
+            .style(input_style)
+            .block(Block::default().borders(Borders::ALL).title("Move"));
+        input_widget.render(side_chunks[6], buf);
     }
 }

@@ -552,29 +552,17 @@ impl App {
                 (cursor_x.min(input_area.right() - 1), cursor_y)
             }
             AppView::Game => {
-                let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(20), Constraint::Length(3)])
-                    .split(area);
-
-                let input_area = chunks[1];
-                let prefix_len = if self
-                    .game
-                    .as_ref()
-                    .map(|g| {
-                        (g.turn() == shakmaty::Color::White && !self.is_black_player)
-                            || (g.turn() == shakmaty::Color::Black && self.is_black_player)
-                    })
-                    .unwrap_or(false)
-                {
-                    "Your move: ".len()
+                if let Some(game) = &self.game {
+                    let is_my_turn = self.is_my_turn();
+                    let view = GameView::new(game.position(), game.san_history()).input(
+                        self.input_buffer.clone(),
+                        is_my_turn,
+                        self.is_multiplayer,
+                    );
+                    view.get_input_position(area)
                 } else {
-                    "Waiting for opponent: ".len()
-                };
-                let cursor_x =
-                    input_area.x + 1 + prefix_len as u16 + self.input_buffer.len() as u16;
-                let cursor_y = input_area.y + 1;
-                (cursor_x.min(input_area.right() - 1), cursor_y)
+                    (area.x, area.y)
+                }
             }
             AppView::GameOver => (area.x + area.width / 2, area.y + area.height / 2 + 3),
         }
@@ -602,11 +590,6 @@ impl App {
 
     fn render_game(&self, area: Rect, buf: &mut Buffer) {
         if let Some(game) = &self.game {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(20), Constraint::Length(3)])
-                .split(area);
-
             let (white_name, black_name) = if self.is_black_player {
                 (self.opponent_name.clone(), self.username.clone())
             } else {
@@ -618,6 +601,8 @@ impl App {
                 .last()
                 .and_then(|m| Some((m.from()?, m.to())));
 
+            let is_my_turn = self.is_my_turn();
+
             let mut view = GameView::new(game.position(), game.san_history())
                 .players(white_name, black_name)
                 .selected(self.selected_square)
@@ -625,7 +610,8 @@ impl App {
                     self.highlight_origins.clone(),
                     self.highlight_destinations.clone(),
                 )
-                .perspective(self.is_black_player);
+                .perspective(self.is_black_player)
+                .input(self.input_buffer.clone(), is_my_turn, self.is_multiplayer);
 
             if let Some((from, to)) = last_move {
                 view = view.last_move(from, to);
@@ -646,20 +632,7 @@ impl App {
                 view = view.status("Stalemate! Draw.".to_string());
             }
 
-            view.render(chunks[0], buf);
-
-            let input_prompt = if game.turn() == shakmaty::Color::White && !self.is_black_player
-                || game.turn() == shakmaty::Color::Black && self.is_black_player
-            {
-                "Your move"
-            } else {
-                "Waiting for opponent"
-            };
-
-            let input_text = format!("{}: {}", input_prompt, self.input_buffer);
-            let input = Paragraph::new(input_text)
-                .block(Block::default().borders(Borders::ALL).title("Move"));
-            input.render(chunks[1], buf);
+            view.render(area, buf);
         }
     }
 
