@@ -2,6 +2,10 @@
 
 An interactive SSH server for playing chess via the terminal.
 
+## Demo
+
+Watch the [demo video](https://youtu.be/ICkVy5-rHRw) to see CheSSH in action!
+
 ## Features
 
 - Connect via SSH and play chess against other players
