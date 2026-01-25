@@ -160,6 +160,8 @@ impl SessionRunner {
             AppAction::Resign => {
                 if let Some(game_id) = *current_game_id {
                     self.handle_resign(app, game_id, current_game_id).await;
+                } else {
+                    app.show_game_over(GameOverReason::YouLose("You resigned".to_string()));
                 }
             }
             AppAction::OfferDraw => {

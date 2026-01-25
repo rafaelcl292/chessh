@@ -263,6 +263,10 @@ impl GameView<'_> {
             Line::from("  Offer/accept"),
             Line::from("  a draw"),
             Line::from(""),
+            Line::from(Span::styled("/lobby", Style::default().fg(Color::Cyan))),
+            Line::from("  Return to"),
+            Line::from("  lobby"),
+            Line::from(""),
             Line::from(Span::styled("/quit", Style::default().fg(Color::Cyan))),
             Line::from("  Disconnect"),
         ];

@@ -281,7 +281,12 @@ impl App {
                             return AppAction::Quit;
                         }
                         "/back" | "/lobby" => {
-                            return AppAction::Resign;
+                            if self.is_multiplayer {
+                                return AppAction::Resign;
+                            } else {
+                                self.return_to_lobby();
+                                return AppAction::ReturnToLobby;
+                            }
                         }
                         _ => {
                             self.status_message = Some("Unknown command".to_string());
