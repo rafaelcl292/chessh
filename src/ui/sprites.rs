@@ -153,10 +153,10 @@ pub struct HalfBlockPixel {
 }
 
 pub fn render_sprite_half_blocks(sprite: &Sprite, bg_color: Color) -> Vec<Vec<HalfBlockPixel>> {
-    let rows = (sprite.height + 1) / 2;
+    let rows = sprite.height.div_ceil(2);
     let mut output = vec![vec![]; rows];
 
-    for row in 0..rows {
+    for (row, row_vec) in output.iter_mut().enumerate() {
         for col in 0..sprite.width {
             let top_y = row * 2;
             let bottom_y = row * 2 + 1;
@@ -204,7 +204,7 @@ pub fn render_sprite_half_blocks(sprite: &Sprite, bg_color: Color) -> Vec<Vec<Ha
                 }
             };
 
-            output[row].push(half_block);
+            row_vec.push(half_block);
         }
     }
 
