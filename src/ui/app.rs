@@ -380,9 +380,6 @@ impl App {
                             if let Ok(to_sq) = input_lower[2..4].parse::<Square>() {
                                 self.highlight_origins = vec![sq];
                                 self.highlight_destinations = vec![to_sq];
-                                if !self.is_multiplayer {
-                                    return AppAction::SubmitMove(sq, to_sq);
-                                }
                             }
                         }
                     } else {
