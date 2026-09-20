@@ -78,13 +78,13 @@ impl GameSession {
         let normalized = Self::normalize_san(text);
         if self.game.play_san(&normalized).is_ok() {
             self.draw_offer = DrawOfferState::None;
-            let last_move = self.game.move_history().last();
-            if let Some(mv) = last_move {
-                if let Some(from) = mv.from() {
-                    return Ok(format!("{}{}", from, mv.to()));
-                }
-            }
-            return Ok(text.to_string());
+            return Ok(self
+                .game
+                .move_history()
+                .last()
+                .expect("successful move")
+                .to_uci(shakmaty::CastlingMode::Standard)
+                .to_string());
         }
 
         let uci = text.to_lowercase();
@@ -158,6 +158,44 @@ impl GameSession {
         match self.draw_offer {
             DrawOfferState::OfferedBy(offerer) => offerer != session_id,
             DrawOfferState::None => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn san_promotions_replay_identically_including_underpromotions() {
+        for (san, uci) in [
+            ("a8=Q+", "a7a8q"),
+            ("a8=R+", "a7a8r"),
+            ("a8=B", "a7a8b"),
+            ("a8=N", "a7a8n"),
+        ] {
+            let white = SessionId::new();
+            let mut session = GameSession::new(1, white, SessionId::new());
+            session.game = Game::from_fen("7k/P7/8/8/8/8/8/7K w - - 0 1").unwrap();
+            let mut replica = Game::from_fen(&session.game.fen()).unwrap();
+            let played = session.play_move_text(white, san).unwrap();
+            assert_eq!(played, uci);
+            replica.play_uci(&played).unwrap();
+            assert_eq!(replica.fen(), session.game.fen());
+        }
+    }
+
+    #[test]
+    fn castling_replays_using_standard_uci() {
+        for (san, uci) in [("O-O", "e1g1"), ("O-O-O", "e1c1")] {
+            let white = SessionId::new();
+            let mut session = GameSession::new(1, white, SessionId::new());
+            session.game = Game::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
+            let mut replica = Game::from_fen(&session.game.fen()).unwrap();
+            let played = session.play_move_text(white, san).unwrap();
+            assert_eq!(played, uci);
+            replica.play_uci(&played).unwrap();
+            assert_eq!(replica.fen(), session.game.fen());
         }
     }
 }

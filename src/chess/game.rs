@@ -1,6 +1,7 @@
 use shakmaty::fen::Fen;
-use shakmaty::san::San;
-use shakmaty::{Chess, Color, KnownOutcome, Move, Outcome, Position, Square};
+use shakmaty::san::{San, SanPlus};
+use shakmaty::uci::UciMove;
+use shakmaty::{Chess, Color, KnownOutcome, Move, Outcome, Position};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameResult {
@@ -12,6 +13,7 @@ pub enum GameResult {
     BlackResigned,
 }
 
+#[derive(Debug, Clone)]
 pub struct Game {
     position: Chess,
     move_history: Vec<Move>,
@@ -53,7 +55,7 @@ impl Game {
             .to_move(&self.position)
             .map_err(|e| format!("Illegal move: {}", e))?;
 
-        let san_notation = San::from_move(&self.position, mv).to_string();
+        let san_notation = SanPlus::from_move(self.position.clone(), mv).to_string();
 
         self.position = self
             .position
@@ -72,48 +74,9 @@ impl Game {
             return Err("Game is already over".to_string());
         }
 
-        let uci_str = uci_str.trim();
-        if uci_str.len() < 4 {
-            return Err("Invalid UCI notation".to_string());
-        }
-
-        let from = uci_str[0..2]
-            .parse::<Square>()
-            .map_err(|_| "Invalid from square")?;
-        let to = uci_str[2..4]
-            .parse::<Square>()
-            .map_err(|_| "Invalid to square")?;
-
-        let promotion = if uci_str.len() > 4 {
-            match uci_str.chars().nth(4) {
-                Some('q') => Some(shakmaty::Role::Queen),
-                Some('r') => Some(shakmaty::Role::Rook),
-                Some('b') => Some(shakmaty::Role::Bishop),
-                Some('n') => Some(shakmaty::Role::Knight),
-                _ => None,
-            }
-        } else {
-            None
-        };
-
-        let legal_moves = self.legal_moves();
-        let mv = legal_moves
-            .into_iter()
-            .find(|m| m.from() == Some(from) && m.to() == to && m.promotion() == promotion)
-            .ok_or_else(|| "Illegal move".to_string())?;
-
-        let san_notation = San::from_move(&self.position, mv).to_string();
-
-        self.position = self
-            .position
-            .clone()
-            .play(mv)
-            .map_err(|e| format!("{}", e))?;
-        self.move_history.push(mv);
-        self.san_history.push(san_notation);
-
-        self.update_result();
-        Ok(())
+        let uci: UciMove = uci_str.trim().parse().map_err(|_| "Invalid UCI notation")?;
+        let mv = uci.to_move(&self.position).map_err(|_| "Illegal move")?;
+        self.play_move(mv)
     }
 
     pub fn play_move(&mut self, mv: Move) -> Result<(), String> {
@@ -125,7 +88,7 @@ impl Game {
             return Err("Illegal move".to_string());
         }
 
-        let san_notation = San::from_move(&self.position, mv).to_string();
+        let san_notation = SanPlus::from_move(self.position.clone(), mv).to_string();
 
         self.position = self
             .position
@@ -232,5 +195,31 @@ impl Game {
 impl Default for Game {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_uci_is_rejected_without_changing_position() {
+        let mut game = Game::new();
+        let initial = game.fen();
+        for input in ["", "💥e4", "e2e4junk", "e2e4x", "a9a1", "e2e5"] {
+            assert!(game.play_uci(input).is_err(), "{input}");
+            assert_eq!(game.fen(), initial);
+        }
+    }
+
+    #[test]
+    fn checkmate_is_recorded_and_further_moves_are_rejected() {
+        let mut game = Game::new();
+        for mv in ["f2f3", "e7e5", "g2g4", "d8h4"] {
+            game.play_uci(mv).unwrap();
+        }
+        assert_eq!(game.result(), GameResult::BlackWins);
+        assert_eq!(game.san_history().last().unwrap(), "Qh4#");
+        assert!(game.play_uci("a2a3").is_err());
     }
 }

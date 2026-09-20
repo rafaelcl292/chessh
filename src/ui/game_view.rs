@@ -25,7 +25,7 @@ pub struct GameView<'a> {
 
 fn captured_pieces(position: &Chess, color: shakmaty::Color) -> Vec<Role> {
     let starting_counts = [
-        (Role::Pawn, 8),
+        (Role::Pawn, 8usize),
         (Role::Knight, 2),
         (Role::Bishop, 2),
         (Role::Rook, 2),
@@ -37,7 +37,7 @@ fn captured_pieces(position: &Chess, color: shakmaty::Color) -> Vec<Role> {
 
     for (role, start_count) in starting_counts {
         let current = board.by_piece(shakmaty::Piece { color, role }).count();
-        for _ in 0..(start_count - current) {
+        for _ in 0..start_count.saturating_sub(current) {
             captured.push(role);
         }
     }
