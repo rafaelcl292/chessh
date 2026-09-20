@@ -31,6 +31,15 @@ The server listens on port 2222 by default. Connect with:
 ssh -p 2222 localhost
 ```
 
+## Server identity
+
+The server creates an Ed25519 key in `host_key` on its first run and reuses it on
+subsequent starts. On Unix it is created with permissions `0600`. Set
+`CHESSH_HOST_KEY` to use a different path (its parent directory must exist).
+Keep this file across restarts and deployments so SSH clients recognize the server.
+An invalid or unreadable existing key stops startup instead of silently replacing
+its identity.
+
 ## Playing
 
 Use `/play` to join matchmaking or `/solo` to play both sides locally. Enter moves

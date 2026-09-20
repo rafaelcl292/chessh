@@ -1,14 +1,13 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use russh::keys::PrivateKey;
 use tokio::signal;
 use tokio::sync::RwLock;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use chessh::server::SessionManager;
-use chessh::ssh::{SshServer, SshServerConfig};
+use chessh::ssh::{load_or_create_host_key, SshServer, SshServerConfig};
 use chessh::ui::init_sprites;
 
 const DEFAULT_PORT: u16 = 2222;
@@ -22,10 +21,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_sprites();
     info!("Sprites loaded successfully");
 
-    info!("Generating host key...");
-
-    let host_key = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
-        .expect("Failed to generate host key");
+    let host_key_path = std::env::var_os("CHESSH_HOST_KEY")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "host_key".into());
+    info!("Loading SSH host key from {}", host_key_path.display());
+    let host_key = load_or_create_host_key(&host_key_path)?;
 
     let address: SocketAddr = format!("0.0.0.0:{}", DEFAULT_PORT).parse()?;
     let config = SshServerConfig::new(address, host_key);
@@ -34,10 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let server = SshServer::new(session_manager);
 
-    info!(
-        "Connect with: ssh -p {} -o StrictHostKeyChecking=no localhost",
-        DEFAULT_PORT
-    );
+    info!("Connect with: ssh -p {} localhost", DEFAULT_PORT);
 
     tokio::select! {
         result = server.run(config) => {
