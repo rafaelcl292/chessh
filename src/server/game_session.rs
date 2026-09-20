@@ -76,7 +76,7 @@ impl GameSession {
         }
 
         let normalized = Self::normalize_san(text);
-        if self.game.play_san(&normalized).is_ok() {
+        if self.game.play_san(text.trim()).is_ok() || self.game.play_san(&normalized).is_ok() {
             self.draw_offer = DrawOfferState::None;
             return Ok(self
                 .game
@@ -183,6 +183,14 @@ mod tests {
             replica.play_uci(&played).unwrap();
             assert_eq!(replica.fen(), session.game.fen());
         }
+    }
+
+    #[test]
+    fn b_file_pawn_capture_promotion_is_not_mistaken_for_bishop() {
+        let white = SessionId::new();
+        let mut session = GameSession::new(1, white, SessionId::new());
+        session.game = Game::from_fen("r6k/1P6/8/8/8/8/8/7K w - - 0 1").unwrap();
+        assert_eq!(session.play_move_text(white, "bxa8=N").unwrap(), "b7a8n");
     }
 
     #[test]

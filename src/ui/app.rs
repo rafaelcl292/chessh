@@ -359,7 +359,8 @@ impl App {
 
                 if let Some(game) = &mut self.game {
                     let san_input = Self::normalize_san(&input);
-                    if game.play_san(&san_input).is_ok()
+                    if game.play_san(&input).is_ok()
+                        || game.play_san(&san_input).is_ok()
                         || game.play_uci(&input.to_lowercase()).is_ok()
                     {
                         self.clear_highlights();
@@ -434,6 +435,12 @@ impl App {
     }
 
     fn find_matching_san_moves(&self, position: &shakmaty::Chess, input: &str) -> Vec<Move> {
+        // Preserve valid pawn SAN on the b-file before accepting lowercase piece shortcuts.
+        if let Ok(san) = input.parse::<San>() {
+            if let Ok(mv) = san.to_move(position) {
+                return vec![mv];
+            }
+        }
         let normalized = Self::normalize_san(input);
         let legal_moves: Vec<Move> = position.legal_moves().into_iter().collect();
 
