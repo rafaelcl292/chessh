@@ -65,6 +65,18 @@ with the result and move history. Moves are disabled so you can inspect the posi
 for as long as you like. Press **Enter** to return to the lobby and start another
 game, or **Q** to disconnect.
 
+## Tests
+
+```bash
+cargo test --locked
+cargo clippy --all-targets --locked -- -D warnings
+```
+
+The suite covers move encoding, promotion, results for both colors, final-board
+rendering, rematches, disconnects, persistent history and host keys. The SSH
+integration test opens two real loopback SSH connections on an ephemeral port and
+plays through checkmate, returning to the lobby, a draw and a disconnection.
+
 ## Dependencies
 
 - `russh` - SSH server implementation
