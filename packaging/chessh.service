@@ -1,0 +1,43 @@
+[Unit]
+Description=CheSSH multiplayer chess server
+After=network.target
+
+[Service]
+Type=simple
+User=chessh
+Group=chessh
+WorkingDirectory=/var/lib/chessh
+StateDirectory=chessh
+StateDirectoryMode=0700
+Environment=CHESSH_HOST_KEY=/var/lib/chessh/host_key
+Environment=CHESSH_HISTORY_PATH=/var/lib/chessh/game_history.jsonl
+ExecStart=/usr/local/bin/chessh
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+
+# Keep the game separate from other workloads on a shared host.
+CPUWeight=20
+CPUQuota=50%
+MemoryHigh=256M
+MemoryMax=512M
+TasksMax=64
+LimitNOFILE=4096
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

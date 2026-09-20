@@ -31,6 +31,11 @@ The server listens on port 2222 by default. Connect with:
 ssh -p 2222 localhost
 ```
 
+## Deployment
+
+See [deployment instructions](docs/deployment.md) for the systemd service,
+persistent data, Cloudflare DNS and release checks.
+
 ## Server identity
 
 The server creates an Ed25519 key in `host_key` on its first run and reuses it on

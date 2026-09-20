@@ -11,3 +11,5 @@ host_key.pub
 
 game_history.jsonl
 .chessh-host-key-*
+
+/.local/
