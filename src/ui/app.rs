@@ -143,7 +143,8 @@ impl App {
         self.opponent_name = opponent;
         self.is_black_player = is_black;
         self.is_multiplayer = multiplayer;
-        self.selected_square = None;
+        self.clear_highlights();
+        self.game_over_reason = None;
         self.input_buffer.clear();
         self.status_message = None;
     }
@@ -181,6 +182,8 @@ impl App {
         self.view = AppView::GameOver;
         self.game_over_reason = Some(reason);
         self.input_buffer.clear();
+        self.clear_highlights();
+        self.status_message = None;
     }
 
     pub fn return_to_lobby(&mut self) {
@@ -191,6 +194,8 @@ impl App {
         self.opponent_name.clear();
         self.input_buffer.clear();
         self.game_over_reason = None;
+        self.status_message = None;
+        self.clear_highlights();
     }
 
     pub fn end_game(&mut self) {
@@ -405,13 +410,14 @@ impl App {
             } else {
                 let input_lower = input.to_lowercase();
                 if input_lower.len() >= 2 {
-                    if let Ok(sq) = input_lower[..2].parse::<Square>() {
+                    if let Ok(sq) = input_lower.get(..2).unwrap_or("").parse::<Square>() {
                         self.selected_square = Some(sq);
                         self.highlight_origins.clear();
                         self.highlight_destinations.clear();
 
                         if input_lower.len() >= 4 {
-                            if let Ok(to_sq) = input_lower[2..4].parse::<Square>() {
+                            if let Ok(to_sq) = input_lower.get(2..4).unwrap_or("").parse::<Square>()
+                            {
                                 self.highlight_origins = vec![sq];
                                 self.highlight_destinations = vec![to_sq];
                             }
@@ -556,8 +562,7 @@ impl App {
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         match self.view {
             AppView::Lobby | AppView::InQueue => self.render_lobby(area, buf),
-            AppView::Game => self.render_game(area, buf),
-            AppView::GameOver => self.render_game_over(area, buf),
+            AppView::Game | AppView::GameOver => self.render_game(area, buf),
         }
     }
 
@@ -565,8 +570,10 @@ impl App {
         let area = frame.area();
         frame.render_widget(self, area);
 
-        let cursor_pos = self.get_cursor_position(area);
-        frame.set_cursor_position(cursor_pos);
+        if self.view != AppView::GameOver {
+            let cursor_pos = self.get_cursor_position(area);
+            frame.set_cursor_position(cursor_pos);
+        }
     }
 
     fn get_cursor_position(&self, area: Rect) -> (u16, u16) {
@@ -580,7 +587,7 @@ impl App {
                 let input_area = chunks[1];
                 let cursor_x = input_area.x + 3 + self.input_buffer.len() as u16;
                 let cursor_y = input_area.y + 1;
-                (cursor_x.min(input_area.right() - 1), cursor_y)
+                (cursor_x.min(input_area.right().saturating_sub(1)), cursor_y)
             }
             AppView::Game => {
                 if let Some(game) = &self.game {
@@ -648,7 +655,14 @@ impl App {
                 view = view.last_move(from, to);
             }
 
-            if let Some(status) = &self.status_message {
+            if let Some(reason) = &self.game_over_reason {
+                let message = match reason {
+                    GameOverReason::YouWin(reason) => format!("YOU WIN - {reason}"),
+                    GameOverReason::YouLose(reason) => format!("YOU LOSE - {reason}"),
+                    GameOverReason::Draw(reason) => format!("DRAW - {reason}"),
+                };
+                view = view.finished(message);
+            } else if let Some(status) = &self.status_message {
                 view = view.status(status.clone());
             } else if game.is_check() {
                 view = view.status("Check!".to_string());
@@ -666,65 +680,116 @@ impl App {
             view.render(area, buf);
         }
     }
-
-    fn render_game_over(&self, area: Rect, buf: &mut Buffer) {
-        use ratatui::layout::Alignment;
-        use ratatui::style::{Color, Modifier, Style};
-        use ratatui::text::{Line, Span};
-
-        let (title, reason, title_color) = match &self.game_over_reason {
-            Some(GameOverReason::YouWin(reason)) => {
-                ("🎉 YOU WIN! 🎉".to_string(), reason.clone(), Color::Green)
-            }
-            Some(GameOverReason::YouLose(reason)) => {
-                ("YOU LOSE".to_string(), reason.clone(), Color::Red)
-            }
-            Some(GameOverReason::Draw(reason)) => {
-                ("DRAW".to_string(), reason.clone(), Color::Yellow)
-            }
-            None => ("Game Over".to_string(), String::new(), Color::White),
-        };
-
-        let lines: Vec<Line> = vec![
-            Line::from(""),
-            Line::from(""),
-            Line::from(Span::styled(
-                "♔ Game Over ♚",
-                Style::default().fg(Color::Yellow),
-            )),
-            Line::from(""),
-            Line::from(""),
-            Line::from(Span::styled(
-                title,
-                Style::default()
-                    .fg(title_color)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(reason, Style::default().fg(title_color))),
-            Line::from(""),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Press ENTER to return to lobby",
-                Style::default().fg(Color::Cyan),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Press Q to quit",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ];
-
-        let paragraph = Paragraph::new(lines)
-            .block(Block::default().borders(Borders::ALL))
-            .alignment(Alignment::Center);
-
-        paragraph.render(area, buf);
-    }
 }
 
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
         self.render(area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyModifiers;
+
+    fn mate(white_wins: bool) -> Game {
+        let mut game = Game::new();
+        let moves = if white_wins {
+            vec!["e4", "e5", "Bc4", "Nc6", "Qh5", "Nf6", "Qxf7#"]
+        } else {
+            vec!["f3", "e5", "g4", "Qh4#"]
+        };
+        for mv in moves {
+            game.play_san(mv).unwrap();
+        }
+        game
+    }
+
+    fn text(buf: &Buffer) -> String {
+        buf.content.iter().map(|cell| cell.symbol()).collect()
+    }
+
+    #[test]
+    fn winner_and_loser_are_correct_for_both_colors() {
+        for white_wins in [false, true] {
+            for is_black in [false, true] {
+                let mut app = App::new("me".into());
+                app.start_game("opponent".into(), is_black);
+                app.update_game(mate(white_wins));
+                app.finish_game("Checkmate".into());
+                assert_eq!(
+                    matches!(app.game_over_reason, Some(GameOverReason::YouWin(_))),
+                    white_wins != is_black
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn final_board_stays_visible_and_unchanged_in_both_orientations() {
+        for is_black in [false, true] {
+            let mut app = App::new("me".into());
+            app.start_game("opponent".into(), is_black);
+            app.update_game(mate(false));
+            let area = Rect::new(0, 0, 100, 30);
+            let mut before = Buffer::empty(area);
+            app.render(area, &mut before);
+            app.finish_game("Checkmate".into());
+            let mut after = Buffer::empty(area);
+            app.render(area, &mut after);
+            // Full layout: help is 18 columns, side panel is 26. The board never moves.
+            for y in 0..30 {
+                for x in 18..74 {
+                    assert_eq!(before[(x, y)], after[(x, y)]);
+                }
+            }
+            let rendered = text(&after);
+            assert!(rendered.contains("Checkmate"));
+            assert!(rendered.contains("Qh4#"));
+            assert!(rendered.contains("ENTER: lobby"));
+            assert!(!rendered.contains("/resign"));
+            let fen = app.game().unwrap().fen();
+            assert_eq!(
+                app.handle_input(InputEvent::Key(KeyCode::Char('e'), KeyModifiers::NONE)),
+                AppAction::None
+            );
+            assert_eq!(app.game().unwrap().fen(), fen);
+            assert_eq!(app.view(), AppView::GameOver);
+            assert_eq!(
+                app.handle_input(InputEvent::Key(KeyCode::Enter, KeyModifiers::NONE)),
+                AppAction::ReturnToLobby
+            );
+            assert_eq!(app.view(), AppView::Lobby);
+            assert!(app.game().is_none());
+            app.start_game("next".into(), false);
+            assert!(app.game_over_reason.is_none());
+            assert_eq!(app.game().unwrap().move_count(), 0);
+        }
+    }
+
+    #[test]
+    fn compact_terminal_shows_final_position_result_and_navigation() {
+        let mut app = App::new("me".into());
+        app.start_game("opponent".into(), false);
+        app.update_game(mate(false));
+        app.finish_game("Checkmate".into());
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 44, 24));
+        app.render(buffer.area, &mut buffer);
+        let rendered = text(&buffer);
+        assert!(rendered.contains("YOU LOSE - Checkmate"));
+        assert!(rendered.contains("ENTER: lobby | Q: quit"));
+        assert!(rendered.contains('♚'));
+        assert!(rendered.contains('♔'));
+    }
+
+    #[test]
+    fn unicode_input_does_not_panic_and_promoted_positions_render() {
+        let mut app = App::new("me".into());
+        app.start_solo_game();
+        app.handle_input(InputEvent::Key(KeyCode::Char('💥'), KeyModifiers::NONE));
+        app.update_game(Game::from_fen("Q6k/8/8/8/8/8/8/3Q3K b - - 0 1").unwrap());
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 30));
+        app.render(buffer.area, &mut buffer);
     }
 }

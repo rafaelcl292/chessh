@@ -21,6 +21,7 @@ pub struct GameView<'a> {
     input_buffer: String,
     is_my_turn: bool,
     is_multiplayer: bool,
+    finished: Option<String>,
 }
 
 fn captured_pieces(position: &Chess, color: shakmaty::Color) -> Vec<Role> {
@@ -78,7 +79,13 @@ impl<'a> GameView<'a> {
             input_buffer: String::new(),
             is_my_turn: true,
             is_multiplayer: false,
+            finished: None,
         }
+    }
+
+    pub fn finished(mut self, result: String) -> Self {
+        self.finished = Some(result);
+        self
     }
 
     pub fn players(mut self, white: String, black: String) -> Self {
@@ -202,6 +209,19 @@ impl Widget for GameView<'_> {
         let (has_help, has_side, _, _) =
             Self::compute_layout_widths(area, help_width, side_width, min_board_width);
 
+        let area = if !has_side && self.finished.is_some() {
+            let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(area);
+            Paragraph::new(vec![
+                Line::from(self.finished.as_deref().unwrap_or("Game over")),
+                Line::from("ENTER: lobby | Q: quit"),
+            ])
+            .style(Style::default().fg(Color::Yellow))
+            .render(rows[1], buf);
+            rows[0]
+        } else {
+            area
+        };
+
         let mut constraints = Vec::new();
         if has_help {
             constraints.push(Constraint::Length(help_width));
@@ -250,6 +270,22 @@ impl Widget for GameView<'_> {
 
 impl GameView<'_> {
     fn render_help_panel(&self, area: Rect, buf: &mut Buffer) {
+        if self.finished.is_some() {
+            Paragraph::new(vec![
+                Line::from("Game over"),
+                Line::from(""),
+                Line::from("Final position"),
+                Line::from(""),
+                Line::from("ENTER"),
+                Line::from("  Back to lobby"),
+                Line::from(""),
+                Line::from("Q"),
+                Line::from("  Disconnect"),
+            ])
+            .block(Block::default().borders(Borders::RIGHT))
+            .render(area, buf);
+            return;
+        }
         let help_lines = vec![
             Line::from(Span::styled(
                 "Commands",
@@ -307,8 +343,8 @@ impl GameView<'_> {
             &self.white_name
         };
 
-        let is_top_turn = self.position.turn() == top_color;
-        let is_bottom_turn = self.position.turn() == bottom_color;
+        let is_top_turn = self.finished.is_none() && self.position.turn() == top_color;
+        let is_bottom_turn = self.finished.is_none() && self.position.turn() == bottom_color;
 
         let top_style = if is_top_turn {
             Style::default().add_modifier(Modifier::BOLD)
@@ -363,6 +399,24 @@ impl GameView<'_> {
             .style(bottom_style)
             .block(Block::default().borders(Borders::ALL));
         bottom_player_widget.render(side_chunks[4], buf);
+
+        if let Some(result) = &self.finished {
+            let color = if result.starts_with("YOU WIN") {
+                Color::Green
+            } else if result.starts_with("YOU LOSE") {
+                Color::Red
+            } else {
+                Color::Yellow
+            };
+            Paragraph::new(result.as_str())
+                .style(Style::default().fg(color).add_modifier(Modifier::BOLD))
+                .block(Block::default().borders(Borders::ALL).title("Result"))
+                .render(side_chunks[5], buf);
+            Paragraph::new("ENTER: lobby | Q: quit")
+                .block(Block::default().borders(Borders::ALL).title("Review"))
+                .render(side_chunks[6], buf);
+            return;
+        }
 
         if let Some(ref status) = self.status_message {
             let status_style = if status.contains("Check") {

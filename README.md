@@ -31,6 +31,17 @@ The server listens on port 2222 by default. Connect with:
 ssh -p 2222 localhost
 ```
 
+## Playing
+
+Use `/play` to join matchmaking or `/solo` to play both sides locally. Enter moves
+in SAN (`Nf3`, `O-O`, `a8=Q`) or UCI (`g1f3`, `e1g1`, `a7a8q`).
+During a multiplayer game, `/resign` concedes and `/draw` offers or accepts a draw.
+
+After checkmate, a draw, resignation or disconnection, the final board stays visible
+with the result and move history. Moves are disabled so you can inspect the position
+for as long as you like. Press **Enter** to return to the lobby and start another
+game, or **Q** to disconnect.
+
 ## Dependencies
 
 - `russh` - SSH server implementation
