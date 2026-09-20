@@ -28,7 +28,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Loading SSH host key from {}", host_key_path.display());
     let host_key = load_or_create_host_key(&host_key_path)?;
 
-    let address: SocketAddr = format!("0.0.0.0:{}", DEFAULT_PORT).parse()?;
+    let address: SocketAddr = std::env::var("CHESSH_BIND_ADDR")
+        .unwrap_or_else(|_| format!("0.0.0.0:{DEFAULT_PORT}"))
+        .parse()?;
     let config = SshServerConfig::new(address, host_key);
 
     let history_path = std::env::var_os("CHESSH_HISTORY_PATH")
@@ -44,7 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let server = SshServer::new(session_manager.clone());
 
-    info!("Connect with: ssh -p {} localhost", DEFAULT_PORT);
+    info!("Listening on {address}");
+    info!("Connect with: ssh -p {} localhost", address.port());
 
     let result = tokio::select! {
         result = server.run(config) => result,

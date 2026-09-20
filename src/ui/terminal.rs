@@ -54,6 +54,9 @@ pub struct SshBackend {
 
 impl SshBackend {
     pub fn new(tx: mpsc::Sender<Vec<u8>>, width: u16, height: u16) -> Self {
+        // Colors encode board squares and piece sides on the remote terminal.
+        // The server's NO_COLOR setting must not strip them from SSH output.
+        crossterm::style::force_color_output(true);
         Self {
             writer: SshWriter::new(tx),
             size: Size { width, height },
@@ -239,7 +242,7 @@ pub fn parse_input(data: &[u8]) -> InputEvent {
         return InputEvent::Unknown;
     }
 
-    if data.len() >= 5 && data[0] == 0xFF && data[1] == 0xFE {
+    if data.len() >= 6 && data[0] == 0xFF && data[1] == 0xFE {
         let width = u16::from_be_bytes([data[2], data[3]]);
         let height = u16::from_be_bytes([data[4], data[5]]);
         return InputEvent::Resize(width, height);
@@ -252,6 +255,9 @@ pub fn parse_input(data: &[u8]) -> InputEvent {
         [0x1B] => InputEvent::Key(KeyCode::Esc, KeyModifiers::NONE),
         [0x7F] | [0x08] => InputEvent::Key(KeyCode::Backspace, KeyModifiers::NONE),
         [0x09] => InputEvent::Key(KeyCode::Tab, KeyModifiers::NONE),
+        [0x1B, 0x5B, 0x5A] => InputEvent::Key(KeyCode::BackTab, KeyModifiers::SHIFT),
+        [0x1B, 0x4F, 0x41] => InputEvent::Key(KeyCode::Up, KeyModifiers::NONE),
+        [0x1B, 0x4F, 0x42] => InputEvent::Key(KeyCode::Down, KeyModifiers::NONE),
         [0x1B, 0x5B, 0x41] => InputEvent::Key(KeyCode::Up, KeyModifiers::NONE),
         [0x1B, 0x5B, 0x42] => InputEvent::Key(KeyCode::Down, KeyModifiers::NONE),
         [0x1B, 0x5B, 0x43] => InputEvent::Key(KeyCode::Right, KeyModifiers::NONE),
@@ -274,5 +280,25 @@ pub fn parse_input(data: &[u8]) -> InputEvent {
             }
             InputEvent::Unknown
         }
+    }
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    #[test]
+    fn ssh_output_preserves_foreground_and_background_colors() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut backend = SshBackend::new(tx, 80, 24);
+        let mut cell = Cell::default();
+        cell.set_symbol("▀")
+            .set_fg(Color::Rgb(151, 203, 166))
+            .set_bg(Color::Rgb(181, 136, 99));
+        backend.draw([(0, 0, &cell)].into_iter()).unwrap();
+        backend.flush().unwrap();
+        let output = String::from_utf8(rx.try_recv().unwrap()).unwrap();
+        assert!(output.contains("38;2;151;203;166"));
+        assert!(output.contains("48;2;181;136;99"));
     }
 }

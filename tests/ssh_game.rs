@@ -96,8 +96,18 @@ async fn ssh_players_can_finish_review_rematch_draw_and_disconnect() {
         });
         let (alice_handle, mut alice) = connect(address, "alice").await;
         let (bob_handle, mut bob) = connect(address, "bob").await;
-        type_text(&alice, "/play\r").await;
-        type_text(&bob, "/play\r").await;
+        type_text(&alice, "\r").await;
+        read_until(&mut alice, "Searching for opponent").await;
+        type_text(&alice, "\x1b").await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while manager.read().await.queue_size() != 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        type_text(&alice, "\r").await;
+        type_text(&bob, "\r").await;
         let (game_id, alice_white) = wait_for_match(&manager, 0).await;
         read_until(&mut alice, "Moves").await;
         read_until(&mut bob, "Moves").await;

@@ -42,6 +42,8 @@ The server listens on port 2222 by default. Connect with:
 ssh -p 2222 localhost
 ```
 
+For a local-only listener, run `CHESSH_BIND_ADDR=127.0.0.1:2222 cargo run`.
+
 ## Deployment
 
 See [deployment instructions](docs/deployment.md) for the systemd service,
@@ -72,8 +74,13 @@ games with result `*` and reason `Server shutdown`.
 
 ## Playing
 
-Use `/play` to join matchmaking or `/solo` to play both sides locally. Enter moves
-in SAN (`Nf3`, `O-O`, `a8=Q`) or UCI (`g1f3`, `e1g1`, `a7a8q`).
+Navigate the lobby with **j/k**, **Up/Down**, or **Tab**. Press **l**, **Right**,
+or **Enter** to open an option; **h**, **Left**, or **Esc** returns from help or
+cancels matchmaking. Number keys **1–4** open menu options directly. Practice mode
+lets you control both sides; it does not include an AI opponent.
+
+The `/play`, `/solo`, and `/quit` commands remain available from the lobby.
+Enter moves in SAN (`Nf3`, `O-O`, `a8=Q`) or UCI (`g1f3`, `e1g1`, `a7a8q`).
 During a multiplayer game, `/resign` concedes and `/draw` offers or accepts a draw.
 
 After checkmate, a draw, resignation or disconnection, the final board stays visible

@@ -1,7 +1,7 @@
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use ratatui::layout::Rect;
+use ratatui::widgets::Widget;
 use ratatui::Frame;
 use shakmaty::san::San;
 use shakmaty::{Move, Position, Role, Square};
@@ -42,6 +42,8 @@ pub enum AppAction {
 
 pub struct App {
     view: AppView,
+    lobby_selection: usize,
+    lobby_help: bool,
     input_buffer: String,
     online_count: usize,
     queue_size: usize,
@@ -62,6 +64,8 @@ impl App {
     pub fn new(username: String) -> Self {
         Self {
             view: AppView::Lobby,
+            lobby_selection: 0,
+            lobby_help: false,
             input_buffer: String::new(),
             online_count: 0,
             queue_size: 0,
@@ -134,7 +138,7 @@ impl App {
     }
 
     pub fn start_solo_game(&mut self) {
-        self.start_game_with_mode("Computer".to_string(), false, false)
+        self.start_game_with_mode("Practice".to_string(), false, false)
     }
 
     fn start_game_with_mode(&mut self, opponent: String, is_black: bool, multiplayer: bool) {
@@ -241,6 +245,36 @@ impl App {
     }
 
     fn handle_lobby_input(&mut self, key: KeyCode) -> AppAction {
+        if self.lobby_help {
+            if matches!(
+                key,
+                KeyCode::Enter | KeyCode::Esc | KeyCode::Left | KeyCode::Char('h')
+            ) {
+                self.lobby_help = false;
+            }
+            return AppAction::None;
+        }
+        if self.input_buffer.is_empty() {
+            match key {
+                KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
+                    self.lobby_selection = (self.lobby_selection + 1) % 4;
+                    return AppAction::None;
+                }
+                KeyCode::Up | KeyCode::BackTab | KeyCode::Char('k') => {
+                    self.lobby_selection = (self.lobby_selection + 3) % 4;
+                    return AppAction::None;
+                }
+                KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
+                    return self.activate_lobby_selection()
+                }
+                KeyCode::Char(c @ '1'..='4') => {
+                    self.lobby_selection = (c as u8 - b'1') as usize;
+                    return self.activate_lobby_selection();
+                }
+                KeyCode::Char('/') => {}
+                _ => return AppAction::None,
+            }
+        }
         match key {
             KeyCode::Char(c) => {
                 self.input_buffer.push(c);
@@ -264,7 +298,11 @@ impl App {
                         self.should_quit = true;
                         AppAction::Quit
                     }
-                    _ => AppAction::None,
+                    _ => {
+                        self.status_message =
+                            Some("Unknown command. Use the menu or /play, /solo, /quit.".into());
+                        AppAction::None
+                    }
                 }
             }
             KeyCode::Esc => {
@@ -275,9 +313,30 @@ impl App {
         }
     }
 
+    fn activate_lobby_selection(&mut self) -> AppAction {
+        self.status_message = None;
+        match self.lobby_selection {
+            0 => AppAction::JoinQueue,
+            1 => {
+                self.start_solo_game();
+                AppAction::None
+            }
+            2 => {
+                self.lobby_help = true;
+                AppAction::None
+            }
+            _ => {
+                self.should_quit = true;
+                AppAction::Quit
+            }
+        }
+    }
+
     fn handle_queue_input(&mut self, key: KeyCode) -> AppAction {
         match key {
-            KeyCode::Esc => AppAction::LeaveQueue,
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Left | KeyCode::Char('h') => {
+                AppAction::LeaveQueue
+            }
             KeyCode::Char('q') => AppAction::LeaveQueue,
             _ => AppAction::None,
         }
@@ -577,7 +636,7 @@ impl App {
         let area = frame.area();
         frame.render_widget(self, area);
 
-        if self.view != AppView::GameOver {
+        if self.view == AppView::Game {
             let cursor_pos = self.get_cursor_position(area);
             frame.set_cursor_position(cursor_pos);
         }
@@ -585,17 +644,7 @@ impl App {
 
     fn get_cursor_position(&self, area: Rect) -> (u16, u16) {
         match self.view {
-            AppView::Lobby | AppView::InQueue => {
-                let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(10), Constraint::Length(3)])
-                    .split(area);
-
-                let input_area = chunks[1];
-                let cursor_x = input_area.x + 3 + self.input_buffer.len() as u16;
-                let cursor_y = input_area.y + 1;
-                (cursor_x.min(input_area.right().saturating_sub(1)), cursor_y)
-            }
+            AppView::Lobby | AppView::InQueue => (area.x, area.y),
             AppView::Game => {
                 if let Some(game) = &self.game {
                     let is_my_turn = self.is_my_turn();
@@ -614,23 +663,17 @@ impl App {
     }
 
     fn render_lobby(&self, area: Rect, buf: &mut Buffer) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(10), Constraint::Length(3)])
-            .split(area);
-
-        let lobby = LobbyView::new()
-            .online_count(self.online_count)
-            .queue_size(self.queue_size)
-            .username(Some(self.username.clone()))
-            .searching(self.view == AppView::InQueue);
-
-        lobby.render(chunks[0], buf);
-
-        let input_text = format!("> {}", self.input_buffer);
-        let input = Paragraph::new(input_text)
-            .block(Block::default().borders(Borders::ALL).title("Command"));
-        input.render(chunks[1], buf);
+        LobbyView {
+            online_count: self.online_count,
+            queue_size: self.queue_size,
+            username: &self.username,
+            searching: self.view == AppView::InQueue,
+            selected: self.lobby_selection,
+            help: self.lobby_help,
+            command: &self.input_buffer,
+            status: self.status_message.as_deref(),
+        }
+        .render(area, buf);
     }
 
     fn render_game(&self, area: Rect, buf: &mut Buffer) {
@@ -699,6 +742,69 @@ impl Widget for &App {
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
+
+    fn key(app: &mut App, code: KeyCode) -> AppAction {
+        app.handle_input(InputEvent::Key(code, KeyModifiers::NONE))
+    }
+
+    #[test]
+    fn lobby_keyboard_navigation_help_practice_and_queue() {
+        let mut app = App::new("player".into());
+        assert_eq!(key(&mut app, KeyCode::Enter), AppAction::JoinQueue);
+        app.join_queue();
+        assert_eq!(key(&mut app, KeyCode::Enter), AppAction::LeaveQueue);
+        app.leave_queue();
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.lobby_selection, 3);
+        key(&mut app, KeyCode::Tab);
+        key(&mut app, KeyCode::Char('j'));
+        key(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.view(), AppView::Game);
+        assert!(!app.is_multiplayer());
+        app.return_to_lobby();
+        key(&mut app, KeyCode::Char('3'));
+        assert!(app.lobby_help);
+        key(&mut app, KeyCode::Char('1'));
+        assert_eq!(app.view(), AppView::Lobby);
+        key(&mut app, KeyCode::Char('h'));
+        assert!(!app.lobby_help);
+        key(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.lobby_selection, 1);
+        for c in "/solo".chars() {
+            key(&mut app, KeyCode::Char(c));
+        }
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.view(), AppView::Game);
+    }
+
+    #[test]
+    fn lobby_is_usable_at_common_sizes_and_safe_at_tiny_sizes() {
+        let mut app = App::new("player".into());
+        for (width, height) in [(100, 30), (80, 24), (44, 24), (40, 16)] {
+            let mut buffer = Buffer::empty(Rect::new(0, 0, width, height));
+            app.render(buffer.area, &mut buffer);
+            let rendered = text(&buffer);
+            for label in [
+                "Play online",
+                "Practice board",
+                "How to play",
+                "Disconnect",
+                "Enter",
+            ] {
+                assert!(
+                    rendered.contains(label),
+                    "{width}x{height}: missing {label}"
+                );
+            }
+        }
+        for (width, height) in [(0, 0), (1, 1), (20, 8)] {
+            for view in [AppView::Lobby, AppView::InQueue] {
+                app.view = view;
+                let mut buffer = Buffer::empty(Rect::new(0, 0, width, height));
+                app.render(buffer.area, &mut buffer);
+            }
+        }
+    }
 
     fn mate(white_wins: bool) -> Game {
         let mut game = Game::new();
