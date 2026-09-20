@@ -72,6 +72,51 @@ impl<'a> BoardWidget<'a> {
         self
     }
 
+    fn geometry(area: Rect) -> Option<(u16, u16, u16, u16, bool)> {
+        let sprite_square_width = 10u16;
+        let sprite_square_height = 5u16;
+
+        let sprite_board_width = 8 * sprite_square_width + 2;
+        let sprite_board_height = 8 * sprite_square_height + 1;
+
+        let use_sprites = area.width >= sprite_board_width && area.height >= sprite_board_height;
+
+        let (square_width, square_height, board_width, board_height) = if use_sprites {
+            (
+                sprite_square_width,
+                sprite_square_height,
+                sprite_board_width,
+                sprite_board_height,
+            )
+        } else {
+            let sw = 4u16;
+            let sh = 2u16;
+            (sw, sh, 8 * sw + 2, 8 * sh + 1)
+        };
+
+        if area.width < board_width || area.height < board_height {
+            return None;
+        }
+
+        let start_x = area.x + (area.width.saturating_sub(board_width)) / 2 + 2;
+        let start_y = area.y + (area.height.saturating_sub(board_height)) / 2;
+
+        Some((start_x, start_y, square_width, square_height, use_sprites))
+    }
+
+    pub fn square_at(area: Rect, x: u16, y: u16, flipped: bool) -> Option<Square> {
+        let (left, top, width, height, _) = Self::geometry(area)?;
+        let col = x.checked_sub(left)? / width;
+        let row = y.checked_sub(top)? / height;
+        if col >= 8 || row >= 8 {
+            return None;
+        }
+        Some(Square::from_coords(
+            File::new(if flipped { 7 - col } else { col } as u32),
+            Rank::new(if flipped { row } else { 7 - row } as u32),
+        ))
+    }
+
     fn is_king_in_check(&self, square: Square) -> bool {
         if !self.position.is_check() {
             return false;
@@ -102,33 +147,11 @@ impl<'a> BoardWidget<'a> {
 
 impl Widget for BoardWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let sprite_square_width = 10u16;
-        let sprite_square_height = 5u16;
-
-        let sprite_board_width = 8 * sprite_square_width + 2;
-        let sprite_board_height = 8 * sprite_square_height + 1;
-
-        let use_sprites = area.width >= sprite_board_width && area.height >= sprite_board_height;
-
-        let (square_width, square_height, board_width, board_height) = if use_sprites {
-            (
-                sprite_square_width,
-                sprite_square_height,
-                sprite_board_width,
-                sprite_board_height,
-            )
-        } else {
-            let sw = 4u16;
-            let sh = 2u16;
-            (sw, sh, 8 * sw + 2, 8 * sh + 1)
-        };
-
-        if area.width < board_width || area.height < board_height {
+        let Some((start_x, start_y, square_width, square_height, use_sprites)) =
+            Self::geometry(area)
+        else {
             return;
-        }
-
-        let start_x = area.x + (area.width.saturating_sub(board_width)) / 2 + 2;
-        let start_y = area.y + (area.height.saturating_sub(board_height)) / 2;
+        };
 
         for rank_idx in 0..8u8 {
             let display_rank = if self.flipped { rank_idx } else { 7 - rank_idx };

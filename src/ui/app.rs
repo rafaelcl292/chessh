@@ -1,7 +1,7 @@
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::widgets::Widget;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 use ratatui::Frame;
 use shakmaty::san::San;
 use shakmaty::{Move, Position, Role, Square};
@@ -42,6 +42,8 @@ pub enum AppAction {
 
 pub struct App {
     view: AppView,
+    area: Rect,
+    promotion: Vec<Move>,
     lobby_selection: usize,
     lobby_help: bool,
     input_buffer: String,
@@ -64,6 +66,8 @@ impl App {
     pub fn new(username: String) -> Self {
         Self {
             view: AppView::Lobby,
+            area: Rect::default(),
+            promotion: Vec::new(),
             lobby_selection: 0,
             lobby_help: false,
             input_buffer: String::new(),
@@ -81,6 +85,10 @@ impl App {
             should_quit: false,
             game_over_reason: None,
         }
+    }
+
+    pub fn set_area(&mut self, area: Rect) {
+        self.area = area;
     }
 
     pub fn is_my_turn(&self) -> bool {
@@ -216,6 +224,7 @@ impl App {
 
     pub fn handle_input(&mut self, event: InputEvent) -> AppAction {
         match event {
+            InputEvent::Click(x, y) => self.handle_click(x, y),
             InputEvent::Key(KeyCode::Char('c'), modifiers)
                 if modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
@@ -242,6 +251,125 @@ impl App {
             },
             _ => AppAction::None,
         }
+    }
+
+    fn promotion_area(&self) -> Rect {
+        let width = self.area.width.min(26);
+        let height = self.area.height.min(7);
+        Rect::new(
+            self.area.x + (self.area.width - width) / 2,
+            self.area.y + (self.area.height - height) / 2,
+            width,
+            height,
+        )
+    }
+
+    fn play_clicked_move(&mut self, mv: Move) -> AppAction {
+        let text = mv.to_uci(shakmaty::CastlingMode::Standard).to_string();
+        self.input_buffer.clear();
+        self.clear_highlights();
+        AppAction::SubmitMoveText(text)
+    }
+
+    fn handle_click(&mut self, x: u16, y: u16) -> AppAction {
+        match self.view {
+            AppView::Lobby => {
+                if self.lobby_help {
+                    let inner = LobbyView::menu_inner(self.area);
+                    if inner.contains((x, y).into()) && y == inner.bottom().saturating_sub(1) {
+                        self.lobby_help = false;
+                    }
+                } else if let Some(index) = LobbyView::option_at(self.area, x, y) {
+                    self.input_buffer.clear();
+                    self.lobby_selection = index;
+                    return self.activate_lobby_selection();
+                }
+            }
+            AppView::InQueue => {
+                let inner = LobbyView::menu_inner(self.area);
+                if inner.contains((x, y).into()) && y == inner.bottom().saturating_sub(1) {
+                    return AppAction::LeaveQueue;
+                }
+            }
+            AppView::Game => {
+                if self.is_multiplayer && !self.is_my_turn() {
+                    return AppAction::None;
+                }
+                if !self.promotion.is_empty() {
+                    let area = self.promotion_area();
+                    if area.contains((x, y).into()) {
+                        let role = match y.saturating_sub(area.y) {
+                            1 => Some(Role::Queen),
+                            2 => Some(Role::Rook),
+                            3 => Some(Role::Bishop),
+                            4 => Some(Role::Knight),
+                            _ => None,
+                        };
+                        if let Some(mv) = self
+                            .promotion
+                            .iter()
+                            .copied()
+                            .find(|m| m.promotion() == role)
+                        {
+                            return self.play_clicked_move(mv);
+                        }
+                    }
+                    return AppAction::None;
+                }
+                let Some(square) = super::board::BoardWidget::square_at(
+                    GameView::board_area(self.area),
+                    x,
+                    y,
+                    self.is_black_player,
+                ) else {
+                    return AppAction::None;
+                };
+                let Some(game) = &self.game else {
+                    return AppAction::None;
+                };
+                if self.selected_square == Some(square) {
+                    self.clear_highlights();
+                    return AppAction::None;
+                }
+                let moves: Vec<_> = game.position().legal_moves().into_iter().collect();
+                if let Some(from) = self.selected_square {
+                    let candidates: Vec<_> = moves
+                        .iter()
+                        .copied()
+                        .filter(|mv| {
+                            let uci = mv.to_uci(shakmaty::CastlingMode::Standard);
+                            uci.from() == Some(from) && uci.to() == Some(square)
+                        })
+                        .collect();
+                    if candidates.len() == 1 {
+                        return self.play_clicked_move(candidates[0]);
+                    }
+                    if candidates.len() > 1 {
+                        self.promotion = candidates;
+                        return AppAction::None;
+                    }
+                }
+                if game
+                    .position()
+                    .board()
+                    .piece_at(square)
+                    .is_some_and(|piece| piece.color == game.turn())
+                {
+                    self.input_buffer.clear();
+                    self.selected_square = Some(square);
+                    self.highlight_origins.clear();
+                    self.highlight_destinations = moves
+                        .iter()
+                        .filter(|mv| mv.from() == Some(square))
+                        .filter_map(|mv| mv.to_uci(shakmaty::CastlingMode::Standard).to())
+                        .collect();
+                } else {
+                    self.clear_highlights();
+                }
+            }
+            AppView::GameOver => {} // Keep the final position available for review.
+        }
+        AppAction::None
     }
 
     fn handle_lobby_input(&mut self, key: KeyCode) -> AppAction {
@@ -343,6 +471,28 @@ impl App {
     }
 
     fn handle_game_input(&mut self, key: KeyCode) -> AppAction {
+        if !self.promotion.is_empty() {
+            if key == KeyCode::Esc {
+                self.clear_highlights();
+                return AppAction::None;
+            }
+            let role = match key {
+                KeyCode::Char('q') => Some(Role::Queen),
+                KeyCode::Char('r') => Some(Role::Rook),
+                KeyCode::Char('b') => Some(Role::Bishop),
+                KeyCode::Char('n') => Some(Role::Knight),
+                _ => None,
+            };
+            if let Some(mv) = self
+                .promotion
+                .iter()
+                .copied()
+                .find(|m| m.promotion() == role)
+            {
+                return self.play_clicked_move(mv);
+            }
+            return AppAction::None;
+        }
         match key {
             KeyCode::Char(c) => {
                 self.input_buffer.push(c);
@@ -600,6 +750,7 @@ impl App {
     }
 
     fn clear_highlights(&mut self) {
+        self.promotion.clear();
         self.selected_square = None;
         self.highlight_origins.clear();
         self.highlight_destinations.clear();
@@ -629,6 +780,17 @@ impl App {
         match self.view {
             AppView::Lobby | AppView::InQueue => self.render_lobby(area, buf),
             AppView::Game | AppView::GameOver => self.render_game(area, buf),
+        }
+        if !self.promotion.is_empty() {
+            let popup = self.promotion_area();
+            Clear.render(popup, buf);
+            Paragraph::new("Q  Queen\nR  Rook\nB  Bishop\nN  Knight\nEsc  Cancel")
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Promote pawn "),
+                )
+                .render(popup, buf);
         }
     }
 
@@ -803,6 +965,89 @@ mod tests {
                 let mut buffer = Buffer::empty(Rect::new(0, 0, width, height));
                 app.render(buffer.area, &mut buffer);
             }
+        }
+    }
+
+    fn click_square(app: &mut App, square: Square) -> AppAction {
+        let board = GameView::board_area(app.area);
+        for y in board.y..board.bottom() {
+            for x in board.x..board.right() {
+                if super::super::board::BoardWidget::square_at(board, x, y, app.is_black_player)
+                    == Some(square)
+                {
+                    return app.handle_input(InputEvent::Click(x, y));
+                }
+            }
+        }
+        panic!("square not rendered");
+    }
+
+    #[test]
+    fn mouse_selects_legal_moves_in_both_board_sizes_and_orientations() {
+        for area in [
+            Rect::new(0, 0, 100, 30),
+            Rect::new(0, 0, 190, 50),
+            Rect::new(0, 0, 44, 24),
+        ] {
+            for flipped in [false, true] {
+                let mut app = App::new("player".into());
+                app.set_area(area);
+                app.start_solo_game();
+                app.is_black_player = flipped;
+                assert_eq!(click_square(&mut app, Square::E2), AppAction::None);
+                assert!(app.highlight_destinations.contains(&Square::E4));
+                assert_eq!(
+                    click_square(&mut app, Square::E4),
+                    AppAction::SubmitMoveText("e2e4".into())
+                );
+                assert_eq!(app.handle_input(InputEvent::Click(0, 0)), AppAction::None);
+            }
+        }
+    }
+
+    #[test]
+    fn mouse_supports_castling_promotion_and_turn_guards() {
+        let mut app = App::new("player".into());
+        app.set_area(Rect::new(0, 0, 100, 30));
+        app.start_solo_game();
+        app.update_game(Game::from_fen("4k3/8/8/8/8/8/8/4K2R w K - 0 1").unwrap());
+        click_square(&mut app, Square::E1);
+        assert_eq!(
+            click_square(&mut app, Square::G1),
+            AppAction::SubmitMoveText("e1g1".into())
+        );
+        app.update_game(Game::from_fen("7k/P7/8/8/8/8/8/7K w - - 0 1").unwrap());
+        click_square(&mut app, Square::A7);
+        click_square(&mut app, Square::A8);
+        assert_eq!(app.promotion.len(), 4);
+        let popup = app.promotion_area();
+        assert_eq!(
+            app.handle_input(InputEvent::Click(popup.x + 2, popup.y + 4)),
+            AppAction::SubmitMoveText("a7a8n".into())
+        );
+        app.start_game("opponent".into(), true);
+        click_square(&mut app, Square::E2);
+        assert!(app.selected_square.is_none());
+        app.show_game_over(GameOverReason::Draw("test".into()));
+        assert_eq!(click_square(&mut app, Square::E2), AppAction::None);
+        assert_eq!(app.view(), AppView::GameOver);
+    }
+
+    #[test]
+    fn mouse_opens_menu_and_cancels_search_at_different_sizes() {
+        for area in [Rect::new(0, 0, 100, 30), Rect::new(0, 0, 44, 24)] {
+            let mut app = App::new("player".into());
+            app.set_area(area);
+            let inner = LobbyView::menu_inner(area);
+            assert_eq!(
+                app.handle_input(InputEvent::Click(inner.x + 2, inner.y + 2)),
+                AppAction::JoinQueue
+            );
+            app.join_queue();
+            assert_eq!(
+                app.handle_input(InputEvent::Click(inner.x + 2, inner.bottom() - 1)),
+                AppAction::LeaveQueue
+            );
         }
     }
 

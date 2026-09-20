@@ -7,7 +7,7 @@ use tracing::{debug, error, info};
 
 use crate::server::SessionManager;
 use crate::ssh::session::{GameEvent, SessionId};
-use crate::ui::{parse_input, App, AppAction, AppView, InputEvent, SshBackend};
+use crate::ui::{App, AppAction, AppView, InputDecoder, InputEvent, SshBackend};
 
 pub struct SessionRunner {
     session_id: SessionId,
@@ -52,6 +52,11 @@ impl SessionRunner {
             }
         };
 
+        let _ = self
+            .output_tx
+            .send(b"\x1b[?1000h\x1b[?1006h".to_vec())
+            .await;
+        let mut decoder = InputDecoder::default();
         let _ = terminal.clear();
 
         let mut app = App::new(username);
@@ -68,6 +73,7 @@ impl SessionRunner {
                 break;
             }
 
+            app.set_area(ratatui::layout::Rect::new(0, 0, self.width, self.height));
             if let Err(e) = terminal.draw(|frame| {
                 app.draw(frame);
             }) {
@@ -79,13 +85,16 @@ impl SessionRunner {
                 input = self.input_rx.recv() => {
                     match input {
                         Some(data) => {
-                            let event = parse_input(&data);
-                            let action = app.handle_input(event);
-
-                            self.handle_action(&mut app, action, &mut current_game_id).await;
-
-                            if let InputEvent::Resize(w, h) = event {
-                                terminal.backend_mut().resize(w, h);
+                            for event in decoder.feed(&data) {
+                                let action = app.handle_input(event);
+                                self.handle_action(&mut app, action, &mut current_game_id).await;
+                                if let InputEvent::Resize(w, h) = event {
+                                    self.width = w;
+                                    self.height = h;
+                                    app.set_area(ratatui::layout::Rect::new(0, 0, w, h));
+                                    terminal.backend_mut().resize(w, h);
+                                }
+                                if app.should_quit() { break; }
                             }
                         }
                         None => {
@@ -102,6 +111,10 @@ impl SessionRunner {
                 }
 
                 _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                    if let Some(event) = decoder.flush_escape() {
+                        let action = app.handle_input(event);
+                        self.handle_action(&mut app, action, &mut current_game_id).await;
+                    }
                     let manager = self.session_manager.read().await;
                     app.set_online_count(manager.session_count());
                     app.set_queue_size(manager.queue_size());
@@ -118,7 +131,7 @@ impl SessionRunner {
         let _ = terminal.show_cursor();
         let _ = terminal.backend_mut().flush();
 
-        let goodbye = "\x1b[?25h\x1b[0m\x1b[2J\x1b[H\r\nGoodbye!\r\n";
+        let goodbye = "\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[0m\x1b[2J\x1b[H\r\nGoodbye!\r\n";
         let _ = self.output_tx.send(goodbye.as_bytes().to_vec()).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

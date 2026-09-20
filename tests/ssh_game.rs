@@ -125,7 +125,26 @@ async fn ssh_players_can_finish_review_rematch_draw_and_disconnect() {
         .iter()
         .enumerate()
         {
-            type_text(if *is_white { &*white } else { &*black }, mv).await;
+            if index == 0 {
+                let area =
+                    chessh::ui::GameView::board_area(ratatui::layout::Rect::new(0, 0, 100, 30));
+                for square in [shakmaty::Square::F2, shakmaty::Square::F3] {
+                    let (x, y) = (area.y..area.bottom())
+                        .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
+                        .find(|(x, y)| {
+                            chessh::ui::BoardWidget::square_at(area, *x, *y, false) == Some(square)
+                        })
+                        .unwrap();
+                    // Deliberately split a mouse report across SSH packets.
+                    white.data(b"\x1b[<0;".as_slice()).await.unwrap();
+                    white
+                        .data(format!("{};{}M", x + 1, y + 1).as_bytes())
+                        .await
+                        .unwrap();
+                }
+            } else {
+                type_text(if *is_white { &*white } else { &*black }, mv).await;
+            }
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
                     let guard = manager.read().await;

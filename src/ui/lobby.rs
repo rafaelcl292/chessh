@@ -21,6 +21,43 @@ pub struct LobbyView<'a> {
     pub status: Option<&'a str>,
 }
 
+impl LobbyView<'_> {
+    pub fn menu_inner(area: Rect) -> Rect {
+        let width = area.width.min(96);
+        let height = area.height.min(29);
+        let content = Rect::new(
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 2,
+            width,
+            height,
+        );
+        let rows = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(content);
+        let body = if width >= 76 && height >= 23 {
+            Layout::horizontal([Constraint::Percentage(43), Constraint::Percentage(57)])
+                .split(rows[1])[1]
+        } else {
+            rows[1]
+        };
+        Block::default().borders(Borders::ALL).inner(body)
+    }
+
+    pub fn option_at(area: Rect, x: u16, y: u16) -> Option<usize> {
+        let inner = Self::menu_inner(area);
+        if !inner.contains((x, y).into()) {
+            return None;
+        }
+        let row = y.checked_sub(inner.y + 2)?;
+        let step = if inner.height < 17 { 2 } else { 3 };
+        let index = row / step;
+        (index < 4 && row % step < step - 1).then_some(index as usize)
+    }
+}
+
 impl Widget for LobbyView<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Block::default()
@@ -99,7 +136,7 @@ impl Widget for LobbyView<'_> {
             } else {
                 " Make your move "
             });
-        let inner = block.inner(body);
+        let inner = Self::menu_inner(area);
         block.render(body, buf);
         let compact = inner.height < 17;
         let mut lines = vec![];
@@ -189,9 +226,24 @@ impl Widget for LobbyView<'_> {
                 )));
             }
         }
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .render(inner, buf);
+        if self.help || self.searching {
+            lines.pop();
+            let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .render(rows[0], buf);
+            Paragraph::new(if self.searching {
+                "  Cancel search  [h / Esc]"
+            } else {
+                "  Back to menu  [h / Esc]"
+            })
+            .style(Style::default().fg(ACCENT).bg(PANEL))
+            .render(rows[1], buf);
+        } else {
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .render(inner, buf);
+        }
         let footer = if !self.command.is_empty() {
             format!("Command: {}_  ·  Esc cancel", self.command)
         } else if self.help || self.searching {

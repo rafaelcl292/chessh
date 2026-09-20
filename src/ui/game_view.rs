@@ -131,6 +131,19 @@ impl<'a> GameView<'a> {
         self
     }
 
+    pub fn board_area(area: Rect) -> Rect {
+        let (help, side, _, _) = Self::compute_layout_widths(area, 18, 26, 34);
+        let mut constraints = Vec::new();
+        if help {
+            constraints.push(Constraint::Length(18));
+        }
+        constraints.push(Constraint::Min(34));
+        if side {
+            constraints.push(Constraint::Length(26));
+        }
+        Layout::horizontal(constraints).split(area)[usize::from(help)]
+    }
+
     pub fn get_input_position(&self, area: Rect) -> (u16, u16) {
         let help_width = 18u16;
         let side_width = 26u16;
@@ -236,7 +249,7 @@ impl Widget for GameView<'_> {
             .constraints(constraints)
             .split(area);
 
-        let (help_panel, board_area, side_panel) = if has_help && has_side {
+        let (help_panel, _board_area, side_panel) = if has_help && has_side {
             (Some(chunks[0]), chunks[1], Some(chunks[2]))
         } else if has_side {
             (None, chunks[0], Some(chunks[1]))
@@ -260,7 +273,7 @@ impl Widget for GameView<'_> {
             board = board.last_move(from, to);
         }
 
-        board.render(board_area, buf);
+        board.render(Self::board_area(area), buf);
 
         if let Some(side_area) = side_panel {
             self.render_side_panel(side_area, buf);

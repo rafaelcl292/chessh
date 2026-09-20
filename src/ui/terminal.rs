@@ -234,6 +234,7 @@ impl Backend for SshBackend {
 pub enum InputEvent {
     Key(KeyCode, KeyModifiers),
     Resize(u16, u16),
+    Click(u16, u16),
     Unknown,
 }
 
@@ -246,6 +247,22 @@ pub fn parse_input(data: &[u8]) -> InputEvent {
         let width = u16::from_be_bytes([data[2], data[3]]);
         let height = u16::from_be_bytes([data[4], data[5]]);
         return InputEvent::Resize(width, height);
+    }
+
+    if data.starts_with(b"\x1b[<") {
+        let Some(body) = data.strip_suffix(b"M") else {
+            return InputEvent::Unknown;
+        };
+        let Ok(body) = std::str::from_utf8(&body[3..]) else {
+            return InputEvent::Unknown;
+        };
+        let values: Vec<_> = body.split(';').map(str::parse::<u16>).collect();
+        if let [Ok(0), Ok(x), Ok(y)] = values.as_slice() {
+            if *x > 0 && *y > 0 {
+                return InputEvent::Click(x - 1, y - 1);
+            }
+        }
+        return InputEvent::Unknown;
     }
 
     match data {
@@ -300,5 +317,96 @@ mod color_tests {
         let output = String::from_utf8(rx.try_recv().unwrap()).unwrap();
         assert!(output.contains("38;2;151;203;166"));
         assert!(output.contains("48;2;181;136;99"));
+    }
+}
+
+/// SSH data packets are not event boundaries: retain fragmented mouse reports.
+#[derive(Default)]
+pub struct InputDecoder {
+    pending: Vec<u8>,
+}
+impl InputDecoder {
+    pub fn flush_escape(&mut self) -> Option<InputEvent> {
+        if self.pending == b"\x1b" {
+            self.pending.clear();
+            Some(InputEvent::Key(KeyCode::Esc, KeyModifiers::NONE))
+        } else {
+            None
+        }
+    }
+
+    pub fn feed(&mut self, data: &[u8]) -> Vec<InputEvent> {
+        if data.starts_with(&[0xff, 0xfe]) {
+            return vec![parse_input(data)];
+        }
+        self.pending.extend_from_slice(data);
+        let mut events = Vec::new();
+        while !self.pending.is_empty() {
+            if self.pending == b"\x1b" {
+                break;
+            }
+            let length = if self.pending.starts_with(b"\x1b[") || self.pending.starts_with(b"\x1bO")
+            {
+                match self
+                    .pending
+                    .iter()
+                    .enumerate()
+                    .skip(2)
+                    .find(|(_, c)| (0x40..=0x7e).contains(*c))
+                {
+                    Some((i, _)) => i + 1,
+                    None if self.pending.len() < 64 => break,
+                    None => {
+                        self.pending.clear();
+                        break;
+                    }
+                }
+            } else if self.pending[0] >= 0x80 {
+                let expected = match self.pending[0] {
+                    0xc2..=0xdf => 2,
+                    0xe0..=0xef => 3,
+                    0xf0..=0xf4 => 4,
+                    _ => 1,
+                };
+                if self.pending.len() < expected {
+                    break;
+                }
+                expected
+            } else {
+                1
+            };
+            events.push(parse_input(&self.pending[..length]));
+            self.pending.drain(..length);
+        }
+        events
+    }
+}
+
+#[cfg(test)]
+mod mouse_tests {
+    use super::*;
+    #[test]
+    fn mouse_reports_survive_every_packet_boundary_and_ignore_releases() {
+        let report = b"\x1b[<0;120;45M";
+        for split in 1..report.len() {
+            let mut decoder = InputDecoder::default();
+            assert!(decoder.feed(&report[..split]).is_empty());
+            assert_eq!(
+                decoder.feed(&report[split..]),
+                vec![InputEvent::Click(119, 44)]
+            );
+        }
+        let mut decoder = InputDecoder::default();
+        assert_eq!(
+            decoder.feed(b"\x1b[<0;1;1M\x1b[<0;1;1m"),
+            vec![InputEvent::Click(0, 0), InputEvent::Unknown]
+        );
+        assert_eq!(parse_input(b"\x1b[<0;0;1M"), InputEvent::Unknown);
+        assert_eq!(parse_input(b"\x1b[<64;1;1M"), InputEvent::Unknown);
+        assert!(decoder.feed(b"\x1b").is_empty());
+        assert_eq!(
+            decoder.flush_escape(),
+            Some(InputEvent::Key(KeyCode::Esc, KeyModifiers::NONE))
+        );
     }
 }

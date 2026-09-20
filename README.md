@@ -79,6 +79,11 @@ or **Enter** to open an option; **h**, **Left**, or **Esc** returns from help or
 cancels matchmaking. Number keys **1–4** open menu options directly. Practice mode
 lets you control both sides; it does not include an AI opponent.
 
+You can also click menu options. On the board, click a piece to see its legal
+moves, then click a destination. Click the selected piece again to deselect it.
+Pawn promotion opens a chooser: click a piece or press **q/r/b/n**, with **Esc**
+to cancel. Mouse input requires a terminal that forwards SGR mouse events over SSH.
+
 The `/play`, `/solo`, and `/quit` commands remain available from the lobby.
 Enter moves in SAN (`Nf3`, `O-O`, `a8=Q`) or UCI (`g1f3`, `e1g1`, `a7a8q`).
 During a multiplayer game, `/resign` concedes and `/draw` offers or accepts a draw.
