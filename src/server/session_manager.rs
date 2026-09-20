@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
-use rand::Rng;
+use rand::RngExt;
 use tokio::sync::mpsc;
 
 use crate::ssh::session::{GameEvent, SessionId, TerminalSize};

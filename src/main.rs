@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use russh::keys::ssh_key::rand_core::OsRng;
 use russh::keys::PrivateKey;
 use tokio::signal;
 use tokio::sync::RwLock;
@@ -25,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Generating host key...");
 
-    let host_key = PrivateKey::random(&mut OsRng, russh::keys::Algorithm::Ed25519)
+    let host_key = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
         .expect("Failed to generate host key");
 
     let address: SocketAddr = format!("0.0.0.0:{}", DEFAULT_PORT).parse()?;

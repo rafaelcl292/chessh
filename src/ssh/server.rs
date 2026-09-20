@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use russh::keys::PrivateKey;
 use russh::server::{Auth, Handler, Msg, Server as RusshServer, Session as RusshSession};
-use russh::{Channel, ChannelId, CryptoVec};
+use russh::{Channel, ChannelId};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info};
 
@@ -118,10 +118,12 @@ impl Handler for ConnectionHandler {
     async fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
+        reply: russh::server::ChannelOpenHandle,
         _session: &mut RusshSession,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
         debug!("Channel open session: {:?}", channel.id());
-        Ok(true)
+        reply.accept().await;
+        Ok(())
     }
 
     async fn pty_request(
@@ -173,7 +175,7 @@ impl Handler for ConnectionHandler {
         let output_handle = handle.clone();
         tokio::spawn(async move {
             while let Some(data) = output_rx.recv().await {
-                let _ = output_handle.data(channel, CryptoVec::from(data)).await;
+                let _ = output_handle.data(channel, data).await;
             }
         });
 
