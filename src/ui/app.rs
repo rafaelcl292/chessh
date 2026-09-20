@@ -8,6 +8,7 @@ use shakmaty::{Move, Position, Role, Square};
 
 use crate::chess::{Game, GameResult};
 
+use super::controls::{self, GameControl};
 use super::game_view::GameView;
 use super::lobby::LobbyView;
 use super::terminal::InputEvent;
@@ -44,6 +45,9 @@ pub struct App {
     view: AppView,
     area: Rect,
     promotion: Vec<Move>,
+    confirmation: Option<GameControl>,
+    confirm_selected: bool,
+    draw_received: bool,
     lobby_selection: usize,
     lobby_help: bool,
     input_buffer: String,
@@ -68,6 +72,9 @@ impl App {
             view: AppView::Lobby,
             area: Rect::default(),
             promotion: Vec::new(),
+            confirmation: None,
+            confirm_selected: false,
+            draw_received: false,
             lobby_selection: 0,
             lobby_help: false,
             input_buffer: String::new(),
@@ -150,6 +157,8 @@ impl App {
     }
 
     fn start_game_with_mode(&mut self, opponent: String, is_black: bool, multiplayer: bool) {
+        self.confirmation = None;
+        self.draw_received = false;
         self.view = AppView::Game;
         self.game = Some(Game::new());
         self.opponent_name = opponent;
@@ -162,6 +171,10 @@ impl App {
     }
 
     pub fn update_game(&mut self, game: Game) {
+        self.draw_received = false;
+        if self.confirmation == Some(GameControl::Draw) {
+            self.confirmation = None;
+        }
         self.game = Some(game);
         self.status_message = None;
         self.clear_highlights();
@@ -191,6 +204,7 @@ impl App {
     }
 
     pub fn show_game_over(&mut self, reason: GameOverReason) {
+        self.confirmation = None;
         self.view = AppView::GameOver;
         self.game_over_reason = Some(reason);
         self.input_buffer.clear();
@@ -199,6 +213,8 @@ impl App {
     }
 
     pub fn return_to_lobby(&mut self) {
+        self.confirmation = None;
+        self.draw_received = false;
         self.view = AppView::Lobby;
         self.game = None;
         self.selected_square = None;
@@ -223,6 +239,14 @@ impl App {
     }
 
     pub fn handle_input(&mut self, event: InputEvent) -> AppAction {
+        if self.confirmation.is_some() {
+            return self.handle_confirmation(event);
+        }
+        if matches!(self.view, AppView::Game | AppView::GameOver) {
+            if let InputEvent::Key(KeyCode::F(number @ 2..=5), _) = event {
+                return self.request_control(GameControl::ALL[(number - 2) as usize]);
+            }
+        }
         match event {
             InputEvent::Click(x, y) => self.handle_click(x, y),
             InputEvent::Key(KeyCode::Char('c'), modifiers)
@@ -253,6 +277,103 @@ impl App {
         }
     }
 
+    pub fn receive_draw_offer(&mut self) {
+        // A changed offer must not turn an already-open "offer" dialog into acceptance.
+        if self.confirmation == Some(GameControl::Draw) {
+            self.confirmation = None;
+        }
+        self.draw_received = true;
+        self.status_message = Some("Opponent offers a draw. F3 to accept".into());
+    }
+
+    fn request_control(&mut self, control: GameControl) -> AppAction {
+        if self.view == AppView::GameOver {
+            return match control {
+                GameControl::Lobby => {
+                    self.return_to_lobby();
+                    AppAction::ReturnToLobby
+                }
+                GameControl::Disconnect => {
+                    self.should_quit = true;
+                    AppAction::Quit
+                }
+                _ => AppAction::None,
+            };
+        }
+        if control == GameControl::Draw && !self.is_multiplayer {
+            self.status_message = Some("Draw offers are available in online games.".into());
+            return AppAction::None;
+        }
+        if !self.is_multiplayer && matches!(control, GameControl::Lobby | GameControl::Disconnect) {
+            return self.execute_control(control);
+        }
+        self.confirmation = Some(control);
+        self.confirm_selected = false;
+        AppAction::None
+    }
+
+    fn execute_control(&mut self, control: GameControl) -> AppAction {
+        self.confirmation = None;
+        match control {
+            GameControl::Resign => AppAction::Resign,
+            GameControl::Draw => AppAction::OfferDraw,
+            GameControl::Lobby => AppAction::ReturnToLobby,
+            GameControl::Disconnect => {
+                self.should_quit = true;
+                AppAction::Quit
+            }
+        }
+    }
+
+    fn handle_confirmation(&mut self, event: InputEvent) -> AppAction {
+        let control = self.confirmation.unwrap();
+        match event {
+            InputEvent::Key(KeyCode::Esc | KeyCode::Char('n'), _) => self.confirmation = None,
+            InputEvent::Key(
+                KeyCode::Tab
+                | KeyCode::BackTab
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Char('h' | 'l'),
+                _,
+            ) => self.confirm_selected = !self.confirm_selected,
+            InputEvent::Key(KeyCode::Char('y'), _) => return self.execute_control(control),
+            InputEvent::Key(KeyCode::Enter, _) => {
+                if self.confirm_selected {
+                    return self.execute_control(control);
+                }
+                self.confirmation = None;
+            }
+            InputEvent::Click(x, y) => {
+                let choices = controls::choices(self.area);
+                if choices[0].contains((x, y).into()) {
+                    self.confirmation = None;
+                } else if choices[1].contains((x, y).into()) {
+                    return self.execute_control(control);
+                }
+            }
+            _ => {}
+        }
+        AppAction::None
+    }
+
+    fn confirmation_message(&self) -> &'static str {
+        match self.confirmation {
+            Some(GameControl::Resign) => "Resign this game? This ends the game as a loss.",
+            Some(GameControl::Draw) if self.draw_received => {
+                "Accept your opponent's draw offer? This ends the game in a draw."
+            }
+            Some(GameControl::Draw) => {
+                "Offer a draw? The game continues until your opponent accepts."
+            }
+            Some(GameControl::Lobby) => "Return to the lobby? You will resign the current game.",
+            Some(GameControl::Disconnect) => {
+                "Disconnect? Leaving now awards the game to your opponent."
+            }
+            None => "",
+        }
+    }
+
     fn promotion_area(&self) -> Rect {
         let width = self.area.width.min(26);
         let height = self.area.height.min(7);
@@ -272,6 +393,16 @@ impl App {
     }
 
     fn handle_click(&mut self, x: u16, y: u16) -> AppAction {
+        if matches!(self.view, AppView::Game | AppView::GameOver) && self.promotion.is_empty() {
+            for (control, rect) in GameControl::ALL
+                .into_iter()
+                .zip(controls::button_areas(self.area))
+            {
+                if rect.contains((x, y).into()) {
+                    return self.request_control(control);
+                }
+            }
+        }
         match self.view {
             AppView::Lobby => {
                 if self.lobby_help {
@@ -517,20 +648,10 @@ impl App {
 
                 if input.starts_with('/') {
                     match input.to_lowercase().as_str() {
-                        "/resign" => return AppAction::Resign,
-                        "/draw" => return AppAction::OfferDraw,
-                        "/quit" | "/q" => {
-                            self.should_quit = true;
-                            return AppAction::Quit;
-                        }
-                        "/back" | "/lobby" => {
-                            if self.is_multiplayer {
-                                return AppAction::Resign;
-                            } else {
-                                self.return_to_lobby();
-                                return AppAction::ReturnToLobby;
-                            }
-                        }
+                        "/resign" => return self.request_control(GameControl::Resign),
+                        "/draw" => return self.request_control(GameControl::Draw),
+                        "/quit" | "/q" => return self.request_control(GameControl::Disconnect),
+                        "/back" | "/lobby" => return self.request_control(GameControl::Lobby),
                         _ => {
                             self.status_message = Some("Unknown command".to_string());
                         }
@@ -792,13 +913,21 @@ impl App {
                 )
                 .render(popup, buf);
         }
+        if self.confirmation.is_some() {
+            controls::confirmation(
+                area,
+                buf,
+                self.confirmation_message(),
+                self.confirm_selected,
+            );
+        }
     }
 
     pub fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
         frame.render_widget(self, area);
 
-        if self.view == AppView::Game {
+        if self.view == AppView::Game && self.confirmation.is_none() && self.promotion.is_empty() {
             let cursor_pos = self.get_cursor_position(area);
             frame.set_cursor_position(cursor_pos);
         }
@@ -1049,6 +1178,75 @@ mod tests {
                 AppAction::LeaveQueue
             );
         }
+    }
+
+    #[test]
+    fn game_controls_require_confirmation_and_preserve_move_input() {
+        let mut app = App::new("player".into());
+        app.set_area(Rect::new(0, 0, 100, 30));
+        app.start_game("opponent".into(), false);
+        key(&mut app, KeyCode::Char('e'));
+        key(&mut app, KeyCode::F(2));
+        assert_eq!(app.confirmation, Some(GameControl::Resign));
+        assert_eq!(key(&mut app, KeyCode::Enter), AppAction::None);
+        assert!(app.confirmation.is_none());
+        assert_eq!(app.input_buffer, "e");
+        key(&mut app, KeyCode::F(2));
+        assert_eq!(key(&mut app, KeyCode::Char('y')), AppAction::Resign);
+        for (number, expected) in [
+            (3, AppAction::OfferDraw),
+            (4, AppAction::ReturnToLobby),
+            (5, AppAction::Quit),
+        ] {
+            key(&mut app, KeyCode::F(number));
+            assert!(!app.should_quit());
+            assert_eq!(key(&mut app, KeyCode::Char('y')), expected);
+        }
+    }
+
+    #[test]
+    fn clickable_controls_and_modal_work_in_wide_and_compact_layouts() {
+        for area in [Rect::new(0, 0, 190, 50), Rect::new(0, 0, 44, 24)] {
+            let mut app = App::new("player".into());
+            app.set_area(area);
+            app.start_game("opponent".into(), false);
+            let button = controls::button_areas(area)[0];
+            assert_eq!(
+                app.handle_input(InputEvent::Click(button.x + 1, button.y + 1)),
+                AppAction::None
+            );
+            let mut buffer = Buffer::empty(area);
+            app.render(area, &mut buffer);
+            assert!(text(&buffer).contains("Confirm action"));
+            let cancel = controls::choices(area)[0];
+            app.handle_input(InputEvent::Click(cancel.x + 1, cancel.y + 1));
+            assert!(app.confirmation.is_none());
+            key(&mut app, KeyCode::F(2));
+            let confirm = controls::choices(area)[1];
+            assert_eq!(
+                app.handle_input(InputEvent::Click(confirm.x + 1, confirm.y + 1)),
+                AppAction::Resign
+            );
+        }
+    }
+
+    #[test]
+    fn changed_game_state_invalidates_stale_draw_confirmations() {
+        let mut app = App::new("player".into());
+        app.start_game("opponent".into(), false);
+        key(&mut app, KeyCode::F(3));
+        app.receive_draw_offer();
+        assert!(app.confirmation.is_none());
+        key(&mut app, KeyCode::F(3));
+        assert!(app.confirmation_message().starts_with("Accept"));
+        app.update_game(Game::new());
+        assert!(app.confirmation.is_none());
+        key(&mut app, KeyCode::F(2));
+        app.show_game_over(GameOverReason::Draw("Game over".into()));
+        assert!(app.confirmation.is_none());
+        app.start_solo_game();
+        key(&mut app, KeyCode::F(3));
+        assert!(app.confirmation.is_none());
     }
 
     fn mate(white_wins: bool) -> Game {

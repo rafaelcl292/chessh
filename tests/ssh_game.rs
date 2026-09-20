@@ -180,9 +180,9 @@ async fn ssh_players_can_finish_review_rematch_draw_and_disconnect() {
         let (next, _) = wait_for_match(&manager, game_id).await;
         read_until(&mut alice, "Moves").await;
         read_until(&mut bob, "Moves").await;
-        type_text(&alice, "/draw\r").await;
+        type_text(&alice, "/draw\ry").await;
         read_until(&mut bob, "offers a draw").await;
-        type_text(&bob, "/draw\r").await;
+        type_text(&bob, "/draw\ry").await;
         read_until(&mut alice, "DRAW").await;
         read_until(&mut bob, "DRAW").await;
         assert!(manager.read().await.get_game(next).is_none());

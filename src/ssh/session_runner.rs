@@ -196,7 +196,21 @@ impl SessionRunner {
             AppAction::SubmitMoveText(text) => {
                 self.submit_move(app, *current_game_id, &text).await;
             }
-            AppAction::ReturnToLobby => *current_game_id = None,
+            AppAction::ReturnToLobby => {
+                if let Some(id) = *current_game_id {
+                    if let Err(error) = self
+                        .session_manager
+                        .write()
+                        .await
+                        .resign_game(self.session_id, id)
+                    {
+                        app.set_status(Some(error));
+                        return;
+                    }
+                }
+                *current_game_id = None;
+                app.return_to_lobby();
+            }
             AppAction::None => {}
         }
         // Solo moves can be played directly by the UI as well as by an action.
@@ -265,7 +279,7 @@ impl SessionRunner {
             }
             GameEvent::DrawOffered { game_id } => {
                 if *current_game_id == Some(game_id) {
-                    app.set_status(Some("Opponent offers a draw. /draw to accept".to_string()));
+                    app.receive_draw_offer();
                 }
             }
         }
@@ -292,6 +306,38 @@ mod tests {
             80,
             24,
         )
+    }
+
+    #[tokio::test]
+    async fn confirmed_lobby_exit_resigns_and_releases_match() {
+        let mut runner = runner();
+        let game_id = {
+            let mut manager = runner.session_manager.write().await;
+            for id in [runner.session_id, SessionId::new()] {
+                manager.add_session(id, TerminalSize::default());
+                manager.join_queue(id);
+            }
+            manager.try_match().unwrap();
+            manager.get_player_game_id(runner.session_id).unwrap()
+        };
+        let mut app = App::new("player".into());
+        app.start_game("opponent".into(), false);
+        let mut current = Some(game_id);
+        let action = app.handle_input(InputEvent::Key(KeyCode::F(4), KeyModifiers::NONE));
+        runner.handle_action(&mut app, action, &mut current).await;
+        assert!(runner
+            .session_manager
+            .read()
+            .await
+            .get_game(game_id)
+            .is_some());
+        let action = app.handle_input(InputEvent::Key(KeyCode::Char('y'), KeyModifiers::NONE));
+        runner.handle_action(&mut app, action, &mut current).await;
+        assert_eq!(app.view(), AppView::Lobby);
+        assert!(current.is_none());
+        let manager = runner.session_manager.read().await;
+        assert!(manager.get_game(game_id).is_none());
+        assert_eq!(manager.history().get_records().len(), 1);
     }
 
     #[tokio::test]

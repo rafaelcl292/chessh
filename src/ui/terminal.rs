@@ -272,6 +272,16 @@ pub fn parse_input(data: &[u8]) -> InputEvent {
         [0x1B] => InputEvent::Key(KeyCode::Esc, KeyModifiers::NONE),
         [0x7F] | [0x08] => InputEvent::Key(KeyCode::Backspace, KeyModifiers::NONE),
         [0x09] => InputEvent::Key(KeyCode::Tab, KeyModifiers::NONE),
+        [0x1B, b'O', b'Q'] | [0x1B, b'[', b'1', b'2', b'~'] => {
+            InputEvent::Key(KeyCode::F(2), KeyModifiers::NONE)
+        }
+        [0x1B, b'O', b'R'] | [0x1B, b'[', b'1', b'3', b'~'] => {
+            InputEvent::Key(KeyCode::F(3), KeyModifiers::NONE)
+        }
+        [0x1B, b'O', b'S'] | [0x1B, b'[', b'1', b'4', b'~'] => {
+            InputEvent::Key(KeyCode::F(4), KeyModifiers::NONE)
+        }
+        [0x1B, b'[', b'1', b'5', b'~'] => InputEvent::Key(KeyCode::F(5), KeyModifiers::NONE),
         [0x1B, 0x5B, 0x5A] => InputEvent::Key(KeyCode::BackTab, KeyModifiers::SHIFT),
         [0x1B, 0x4F, 0x41] => InputEvent::Key(KeyCode::Up, KeyModifiers::NONE),
         [0x1B, 0x4F, 0x42] => InputEvent::Key(KeyCode::Down, KeyModifiers::NONE),
@@ -385,6 +395,25 @@ impl InputDecoder {
 #[cfg(test)]
 mod mouse_tests {
     use super::*;
+    #[test]
+    fn function_key_shortcuts_decode_in_both_terminal_formats() {
+        for (bytes, key) in [
+            (b"\x1bOQ".as_slice(), 2),
+            (b"\x1bOR", 3),
+            (b"\x1bOS", 4),
+            (b"\x1b[12~", 2),
+            (b"\x1b[13~", 3),
+            (b"\x1b[14~", 4),
+            (b"\x1b[15~", 5),
+        ] {
+            let mut decoder = InputDecoder::default();
+            assert_eq!(
+                decoder.feed(bytes),
+                vec![InputEvent::Key(KeyCode::F(key), KeyModifiers::NONE)]
+            );
+        }
+    }
+
     #[test]
     fn mouse_reports_survive_every_packet_boundary_and_ignore_releases() {
         let report = b"\x1b[<0;120;45M";

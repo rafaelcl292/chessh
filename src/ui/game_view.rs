@@ -2,10 +2,11 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Widget};
+use ratatui::widgets::{Block, List, ListItem, Paragraph, Widget};
 use shakmaty::{Chess, Position, Role};
 
 use super::board::BoardWidget;
+use super::controls::{self, panel, GameControl, ACCENT, BG, MUTED, TEXT};
 
 pub struct GameView<'a> {
     position: &'a Chess,
@@ -132,6 +133,7 @@ impl<'a> GameView<'a> {
     }
 
     pub fn board_area(area: Rect) -> Rect {
+        let area = Self::content_area(area);
         let (help, side, _, _) = Self::compute_layout_widths(area, 18, 26, 34);
         let mut constraints = Vec::new();
         if help {
@@ -144,7 +146,16 @@ impl<'a> GameView<'a> {
         Layout::horizontal(constraints).split(area)[usize::from(help)]
     }
 
+    fn content_area(area: Rect) -> Rect {
+        if area.width < 78 {
+            Rect::new(area.x, area.y, area.width, area.height.saturating_sub(3))
+        } else {
+            area
+        }
+    }
+
     pub fn get_input_position(&self, area: Rect) -> (u16, u16) {
+        let area = Self::content_area(area);
         let help_width = 18u16;
         let side_width = 26u16;
         let min_board_width = 34u16;
@@ -222,18 +233,11 @@ impl Widget for GameView<'_> {
         let (has_help, has_side, _, _) =
             Self::compute_layout_widths(area, help_width, side_width, min_board_width);
 
-        let area = if !has_side && self.finished.is_some() {
-            let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(area);
-            Paragraph::new(vec![
-                Line::from(self.finished.as_deref().unwrap_or("Game over")),
-                Line::from("ENTER: lobby | Q: quit"),
-            ])
-            .style(Style::default().fg(Color::Yellow))
-            .render(rows[1], buf);
-            rows[0]
-        } else {
-            area
-        };
+        let full_area = area;
+        Block::default()
+            .style(Style::default().bg(BG).fg(TEXT))
+            .render(area, buf);
+        let area = Self::content_area(area);
 
         let mut constraints = Vec::new();
         if has_help {
@@ -273,56 +277,79 @@ impl Widget for GameView<'_> {
             board = board.last_move(from, to);
         }
 
-        board.render(Self::board_area(area), buf);
+        board.render(Self::board_area(full_area), buf);
 
         if let Some(side_area) = side_panel {
             self.render_side_panel(side_area, buf);
+        }
+        if !has_side {
+            let status = self
+                .finished
+                .as_deref()
+                .or(self.status_message.as_deref())
+                .unwrap_or("Click a piece or type a move");
+            Paragraph::new(status)
+                .style(Style::default().fg(ACCENT))
+                .render(
+                    Rect::new(area.x, area.y, area.width, area.height.min(1)),
+                    buf,
+                );
+            if area.height > 0 {
+                Paragraph::new(if self.finished.is_some() {
+                    "ENTER: lobby | Q: quit".into()
+                } else {
+                    format!("> {}", self.input_buffer)
+                })
+                .render(Rect::new(area.x, area.bottom() - 1, area.width, 1), buf);
+            }
+        }
+        for (control, rect) in GameControl::ALL
+            .into_iter()
+            .zip(controls::button_areas(full_area))
+        {
+            let enabled = match control {
+                GameControl::Resign => self.finished.is_none(),
+                GameControl::Draw => self.finished.is_none() && self.is_multiplayer,
+                _ => true,
+            };
+            Paragraph::new(
+                if control == GameControl::Draw
+                    && self
+                        .status_message
+                        .as_deref()
+                        .is_some_and(|s| s.contains("offers a draw"))
+                    && full_area.width >= 78
+                {
+                    "F3 Accept draw"
+                } else if control == GameControl::Disconnect && full_area.width >= 78 {
+                    "F5 Disconnect"
+                } else {
+                    control.label()
+                },
+            )
+            .style(Style::default().fg(if enabled { ACCENT } else { MUTED }))
+            .block(panel(""))
+            .render(rect, buf);
         }
     }
 }
 
 impl GameView<'_> {
     fn render_help_panel(&self, area: Rect, buf: &mut Buffer) {
-        if self.finished.is_some() {
-            Paragraph::new(vec![
-                Line::from("Game over"),
-                Line::from(""),
-                Line::from("Final position"),
-                Line::from(""),
-                Line::from("ENTER"),
-                Line::from("  Back to lobby"),
-                Line::from(""),
-                Line::from("Q"),
-                Line::from("  Disconnect"),
-            ])
-            .block(Block::default().borders(Borders::RIGHT))
-            .render(area, buf);
-            return;
-        }
-        let help_lines = vec![
+        Paragraph::new(vec![
             Line::from(Span::styled(
-                "Commands",
-                Style::default().add_modifier(Modifier::BOLD),
+                " CheSSH",
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             )),
-            Line::from(""),
-            Line::from(Span::styled("/resign", Style::default().fg(Color::Cyan))),
-            Line::from("  Forfeit game"),
-            Line::from(""),
-            Line::from(Span::styled("/draw", Style::default().fg(Color::Cyan))),
-            Line::from("  Offer/accept"),
-            Line::from("  a draw"),
-            Line::from(""),
-            Line::from(Span::styled("/lobby", Style::default().fg(Color::Cyan))),
-            Line::from("  Return to"),
-            Line::from("  lobby"),
-            Line::from(""),
-            Line::from(Span::styled("/quit", Style::default().fg(Color::Cyan))),
-            Line::from("  Disconnect"),
-        ];
-
-        let help_widget =
-            Paragraph::new(help_lines).block(Block::default().borders(Borders::RIGHT));
-        help_widget.render(area, buf);
+            Line::from(if self.finished.is_some() {
+                " Final position"
+            } else if self.is_multiplayer {
+                " Online game"
+            } else {
+                " Practice"
+            }),
+        ])
+        .render(area, buf);
     }
 
     fn render_side_panel(&self, area: Rect, buf: &mut Buffer) {
@@ -360,13 +387,13 @@ impl GameView<'_> {
         let is_bottom_turn = self.finished.is_none() && self.position.turn() == bottom_color;
 
         let top_style = if is_top_turn {
-            Style::default().add_modifier(Modifier::BOLD)
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
         let top_player_widget = Paragraph::new(top_player.as_str())
             .style(top_style)
-            .block(Block::default().borders(Borders::ALL));
+            .block(panel(if is_top_turn { " To move " } else { "" }));
         top_player_widget.render(side_chunks[0], buf);
 
         let top_captured = captured_pieces(self.position, top_color);
@@ -390,8 +417,7 @@ impl GameView<'_> {
             })
             .collect();
 
-        let moves_list =
-            List::new(moves).block(Block::default().borders(Borders::ALL).title("Moves"));
+        let moves_list = List::new(moves).block(panel(" Moves "));
         moves_list.render(side_chunks[2], buf);
 
         let bottom_captured = captured_pieces(self.position, bottom_color);
@@ -404,13 +430,13 @@ impl GameView<'_> {
         bottom_captured_widget.render(side_chunks[3], buf);
 
         let bottom_style = if is_bottom_turn {
-            Style::default().add_modifier(Modifier::BOLD)
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
         let bottom_player_widget = Paragraph::new(bottom_player.as_str())
             .style(bottom_style)
-            .block(Block::default().borders(Borders::ALL));
+            .block(panel(if is_bottom_turn { " To move " } else { "" }));
         bottom_player_widget.render(side_chunks[4], buf);
 
         if let Some(result) = &self.finished {
@@ -423,10 +449,10 @@ impl GameView<'_> {
             };
             Paragraph::new(result.as_str())
                 .style(Style::default().fg(color).add_modifier(Modifier::BOLD))
-                .block(Block::default().borders(Borders::ALL).title("Result"))
+                .block(panel(" Result "))
                 .render(side_chunks[5], buf);
             Paragraph::new("ENTER: lobby | Q: quit")
-                .block(Block::default().borders(Borders::ALL).title("Review"))
+                .block(panel(" Review "))
                 .render(side_chunks[6], buf);
             return;
         }
@@ -444,7 +470,7 @@ impl GameView<'_> {
 
             let status_widget = Paragraph::new(status.as_str())
                 .style(status_style)
-                .block(Block::default().borders(Borders::ALL).title("Status"));
+                .block(panel(" Status "));
             status_widget.render(side_chunks[5], buf);
         }
 
@@ -457,7 +483,7 @@ impl GameView<'_> {
         };
         let input_widget = Paragraph::new(input_text)
             .style(input_style)
-            .block(Block::default().borders(Borders::ALL).title("Move"));
+            .block(panel(" Move "));
         input_widget.render(side_chunks[6], buf);
     }
 }

@@ -1,5 +1,6 @@
 mod app;
 mod board;
+mod controls;
 mod game_view;
 mod lobby;
 mod sprites;

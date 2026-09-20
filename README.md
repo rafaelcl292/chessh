@@ -13,7 +13,7 @@ installation required.
 Once connected, type `/play` and press **Enter** to find an opponent, or `/solo`
 to explore the board and play both sides yourself.
 
-![CheSSH terminal interface with a pixel-art chessboard, move history and game commands](assets/screenshot.png)
+![CheSSH terminal interface with a pixel-art chessboard, move history and clickable game controls](assets/screenshot.png)
 
 *Solo practice shown above. In solo mode, you control both sides.*
 
@@ -86,7 +86,12 @@ to cancel. Mouse input requires a terminal that forwards SGR mouse events over S
 
 The `/play`, `/solo`, and `/quit` commands remain available from the lobby.
 Enter moves in SAN (`Nf3`, `O-O`, `a8=Q`) or UCI (`g1f3`, `e1g1`, `a7a8q`).
-During a multiplayer game, `/resign` concedes and `/draw` offers or accepts a draw.
+During a game, click the action buttons or use **F2** (resign), **F3** (offer or
+accept a draw), **F4** (lobby), and **F5** (disconnect). Resignation and draw actions
+require confirmation. Leaving an online game also asks for confirmation because
+it forfeits the game. Dialogs default to Cancel: use **Tab** then **Enter**, **Y**,
+or click Confirm to proceed; **Esc** cancels. Slash commands use the same dialogs.
+Draw offers are disabled in practice mode.
 
 After checkmate, a draw, resignation or disconnection, the final board stays visible
 with the result and move history. Moves are disabled so you can inspect the position
