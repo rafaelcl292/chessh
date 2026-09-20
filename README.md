@@ -1,17 +1,28 @@
 # CheSSH
 
-An interactive SSH server for playing chess via the terminal.
+Try it now from your terminal:
 
-## Demo
+```bash
+ssh -p 2222 chess.rafaelcl.com
+```
 
-Watch the [demo video](https://youtu.be/ICkVy5-rHRw) to see CheSSH in action!
+CheSSH is a multiplayer chess game played entirely over SSH, with a pixel-art
+board right in your terminal. All you need is an SSH client — no signup or game
+installation required.
+
+Once connected, type `/play` and press **Enter** to find an opponent, or `/solo`
+to explore the board and play both sides yourself.
+
+![CheSSH terminal interface with a pixel-art chessboard, move history and game commands](assets/screenshot.png)
+
+*Solo practice shown above. In solo mode, you control both sides.*
 
 ## Features
 
 - Connect via SSH and play chess against other players
 - Real-time multiplayer with matchmaking
 - Beautiful terminal UI with pixel art-inspired colors
-- Full chess rules validation via shakmaty
+- Legal move validation via shakmaty
 
 ## Building
 
