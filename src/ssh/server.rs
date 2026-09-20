@@ -66,6 +66,7 @@ pub struct ConnectionHandler {
     session_manager: Arc<RwLock<SessionManager>>,
     session_id: SessionId,
     username: Option<String>,
+    shell_started: bool,
     channel_writers: HashMap<ChannelId, mpsc::Sender<Vec<u8>>>,
     terminal_size: TerminalSize,
 }
@@ -76,6 +77,7 @@ impl ConnectionHandler {
             session_manager,
             session_id: SessionId::new(),
             username: None,
+            shell_started: false,
             channel_writers: HashMap::new(),
             terminal_size: TerminalSize::default(),
         }
@@ -155,6 +157,11 @@ impl Handler for ConnectionHandler {
         session: &mut RusshSession,
     ) -> Result<(), Self::Error> {
         debug!("Shell request on channel {:?}", channel);
+        if self.shell_started {
+            session.request_failure();
+            return Ok(());
+        }
+        self.shell_started = true;
         session.request_success();
 
         let session_manager = self.session_manager.clone();
@@ -168,7 +175,7 @@ impl Handler for ConnectionHandler {
         let handle = session.handle();
         let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>(256);
         let (output_tx, mut output_rx) = mpsc::channel::<Vec<u8>>(256);
-        let (game_event_tx, game_event_rx) = mpsc::channel::<super::session::GameEvent>(64);
+        let (game_event_tx, game_event_rx) = mpsc::unbounded_channel::<super::session::GameEvent>();
 
         self.channel_writers.insert(channel, input_tx);
 
@@ -204,19 +211,7 @@ impl Handler for ConnectionHandler {
 
             {
                 let mut manager = session_manager.write().await;
-                if let Some(game_id) = manager.remove_session(session_id) {
-                    if let Some(game_session) = manager.get_game(game_id) {
-                        let opponent_id = game_session.get_opponent(session_id);
-                        if let Some(opp_id) = opponent_id {
-                            if let Some(tx) = manager.get_game_event_tx(opp_id) {
-                                let _ = tx
-                                    .send(super::session::GameEvent::OpponentDisconnected)
-                                    .await;
-                            }
-                        }
-                    }
-                    manager.end_game(game_id);
-                }
+                manager.remove_session(session_id);
             }
 
             let _ = handle.eof(channel).await;

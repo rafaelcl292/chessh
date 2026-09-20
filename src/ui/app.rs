@@ -6,7 +6,7 @@ use ratatui::Frame;
 use shakmaty::san::San;
 use shakmaty::{Move, Position, Role, Square};
 
-use crate::chess::Game;
+use crate::chess::{Game, GameResult};
 
 use super::game_view::GameView;
 use super::lobby::LobbyView;
@@ -146,6 +146,35 @@ impl App {
         self.selected_square = None;
         self.input_buffer.clear();
         self.status_message = None;
+    }
+
+    pub fn update_game(&mut self, game: Game) {
+        self.game = Some(game);
+        self.status_message = None;
+        self.clear_highlights();
+    }
+
+    pub fn finish_game(&mut self, reason: String) {
+        let Some(game) = &self.game else {
+            return;
+        };
+        let winner = match game.result() {
+            GameResult::WhiteWins | GameResult::BlackResigned => Some(shakmaty::Color::White),
+            GameResult::BlackWins | GameResult::WhiteResigned => Some(shakmaty::Color::Black),
+            GameResult::Draw => None,
+            GameResult::Ongoing => return,
+        };
+        let my_color = if self.is_black_player {
+            shakmaty::Color::Black
+        } else {
+            shakmaty::Color::White
+        };
+        let result = match winner {
+            Some(color) if color == my_color => GameOverReason::YouWin(reason),
+            Some(_) => GameOverReason::YouLose(reason),
+            None => GameOverReason::Draw(reason),
+        };
+        self.show_game_over(result);
     }
 
     pub fn show_game_over(&mut self, reason: GameOverReason) {

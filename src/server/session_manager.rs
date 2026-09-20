@@ -28,7 +28,7 @@ pub struct PlayerSession {
     pub username: Option<String>,
     pub state: PlayerState,
     pub terminal_size: TerminalSize,
-    pub game_event_tx: Option<mpsc::Sender<GameEvent>>,
+    pub game_event_tx: Option<mpsc::UnboundedSender<GameEvent>>,
 }
 
 pub struct SessionManager {
@@ -60,7 +60,11 @@ impl SessionManager {
         tracing::info!("Session {} connected. Total: {}", id, self.sessions.len());
     }
 
-    pub fn register_game_event_channel(&mut self, id: SessionId, tx: mpsc::Sender<GameEvent>) {
+    pub fn register_game_event_channel(
+        &mut self,
+        id: SessionId,
+        tx: mpsc::UnboundedSender<GameEvent>,
+    ) {
         if let Some(session) = self.sessions.get_mut(&id) {
             session.game_event_tx = Some(tx);
         }
@@ -69,15 +73,13 @@ impl SessionManager {
     pub fn remove_session(&mut self, id: SessionId) -> Option<u64> {
         self.queue.retain(|&qid| qid != id);
 
-        let game_id = if let Some(session) = self.sessions.get(&id) {
-            if let PlayerState::Playing(gid) = session.state {
-                Some(gid)
-            } else {
-                None
+        let game_id = self.get_player_game_id(id);
+        if let Some(gid) = game_id {
+            if let Some(game) = self.games.get_mut(&gid) {
+                let _ = game.resign(id);
             }
-        } else {
-            None
-        };
+            self.finish_game(gid, "Opponent disconnected");
+        }
 
         self.sessions.remove(&id);
         tracing::info!(
@@ -117,7 +119,12 @@ impl SessionManager {
     }
 
     pub fn join_queue(&mut self, id: SessionId) {
-        if !self.queue.contains(&id) {
+        if self
+            .sessions
+            .get(&id)
+            .is_some_and(|s| s.state == PlayerState::Idle)
+            && !self.queue.contains(&id)
+        {
             self.queue.push_back(id);
             if let Some(session) = self.sessions.get_mut(&id) {
                 session.state = PlayerState::InQueue;
@@ -129,7 +136,9 @@ impl SessionManager {
     pub fn leave_queue(&mut self, id: SessionId) {
         self.queue.retain(|&qid| qid != id);
         if let Some(session) = self.sessions.get_mut(&id) {
-            session.state = PlayerState::Idle;
+            if session.state == PlayerState::InQueue {
+                session.state = PlayerState::Idle;
+            }
         }
         tracing::debug!(
             "Removed {} from queue. Queue size: {}",
@@ -184,6 +193,18 @@ impl SessionManager {
             black_name
         );
 
+        for (id, opponent_name, is_white) in
+            [(white_id, black_name, true), (black_id, white_name, false)]
+        {
+            self.send_event(
+                id,
+                GameEvent::MatchFound {
+                    game_id,
+                    opponent_name,
+                    is_white,
+                },
+            );
+        }
         Some(game_id)
     }
 
@@ -228,7 +249,10 @@ impl SessionManager {
         })
     }
 
-    pub fn get_game_event_tx(&self, session_id: SessionId) -> Option<mpsc::Sender<GameEvent>> {
+    pub fn get_game_event_tx(
+        &self,
+        session_id: SessionId,
+    ) -> Option<mpsc::UnboundedSender<GameEvent>> {
         self.sessions
             .get(&session_id)
             .and_then(|s| s.game_event_tx.clone())
@@ -250,6 +274,70 @@ impl SessionManager {
         Some((white_id, black_id))
     }
 
+    fn send_event(&self, id: SessionId, event: GameEvent) {
+        if let Some(tx) = self.get_game_event_tx(id) {
+            let _ = tx.send(event);
+        }
+    }
+
+    fn publish_state(&self, game_id: u64, finished_reason: Option<String>) {
+        if let Some(session) = self.games.get(&game_id) {
+            for id in [session.white_player, session.black_player] {
+                self.send_event(
+                    id,
+                    GameEvent::StateUpdated {
+                        game_id,
+                        game: session.game.clone(),
+                        finished_reason: finished_reason.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    fn finish_game(&mut self, game_id: u64, reason: &str) {
+        self.publish_state(game_id, Some(reason.to_string()));
+        self.end_game(game_id);
+    }
+
+    pub fn submit_move(&mut self, id: SessionId, game_id: u64, text: &str) -> Result<(), String> {
+        let session = self.games.get_mut(&game_id).ok_or("Game is already over")?;
+        session.play_move_text(id, text)?;
+        if session.game.is_game_over() {
+            let reason = if session.game.is_checkmate() {
+                "Checkmate"
+            } else if session.game.is_stalemate() {
+                "Stalemate"
+            } else {
+                "Insufficient material"
+            };
+            self.finish_game(game_id, reason);
+        } else {
+            self.publish_state(game_id, None);
+        }
+        Ok(())
+    }
+
+    pub fn resign_game(&mut self, id: SessionId, game_id: u64) -> Result<(), String> {
+        self.games
+            .get_mut(&game_id)
+            .ok_or("Game is already over")?
+            .resign(id)?;
+        self.finish_game(game_id, "Resignation");
+        Ok(())
+    }
+
+    pub fn offer_draw(&mut self, id: SessionId, game_id: u64) -> Result<(), String> {
+        let session = self.games.get_mut(&game_id).ok_or("Game is already over")?;
+        session.offer_draw(id)?;
+        if session.game.is_game_over() {
+            self.finish_game(game_id, "Draw by agreement");
+        } else if let Some(opponent) = session.get_opponent(id) {
+            self.send_event(opponent, GameEvent::DrawOffered { game_id });
+        }
+        Ok(())
+    }
+
     pub fn find_by_username(&self, username: &str) -> Option<&PlayerSession> {
         self.sessions
             .values()
@@ -260,5 +348,199 @@ impl SessionManager {
 impl Default for SessionManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chess::{Game, GameResult};
+
+    fn matched() -> (
+        SessionManager,
+        u64,
+        SessionId,
+        SessionId,
+        mpsc::UnboundedReceiver<GameEvent>,
+        mpsc::UnboundedReceiver<GameEvent>,
+    ) {
+        let mut manager = SessionManager::new();
+        let mut receivers = HashMap::new();
+        for _ in 0..2 {
+            let id = SessionId::new();
+            manager.add_session(id, TerminalSize::default());
+            let (tx, rx) = mpsc::unbounded_channel();
+            manager.register_game_event_channel(id, tx);
+            receivers.insert(id, rx);
+            manager.join_queue(id);
+        }
+        let gid = manager.try_match().unwrap();
+        let info = manager.get_match_info(gid).unwrap();
+        let mut white_rx = receivers.remove(&info.white_id).unwrap();
+        let mut black_rx = receivers.remove(&info.black_id).unwrap();
+        assert!(matches!(
+            white_rx.try_recv().unwrap(),
+            GameEvent::MatchFound { is_white: true, .. }
+        ));
+        assert!(matches!(
+            black_rx.try_recv().unwrap(),
+            GameEvent::MatchFound {
+                is_white: false,
+                ..
+            }
+        ));
+        (
+            manager,
+            gid,
+            info.white_id,
+            info.black_id,
+            white_rx,
+            black_rx,
+        )
+    }
+
+    fn assert_released(manager: &mut SessionManager, gid: u64, white: SessionId, black: SessionId) {
+        assert!(manager.get_game(gid).is_none());
+        for id in [white, black] {
+            assert_eq!(manager.get_session(id).unwrap().state, PlayerState::Idle);
+            manager.join_queue(id);
+        }
+        let next = manager.try_match().unwrap();
+        assert_ne!(next, gid);
+        assert!(manager.get_game(next).is_some());
+    }
+
+    #[test]
+    fn both_players_receive_identical_final_position_and_can_play_again() {
+        for moves in [
+            vec!["f3", "e5", "g4", "Qh4#"],
+            vec!["e4", "e5", "Bc4", "Nc6", "Qh5", "Nf6", "Qxf7#"],
+        ] {
+            let (mut manager, gid, white, black, mut wrx, mut brx) = matched();
+            for (i, mv) in moves.iter().enumerate() {
+                manager
+                    .submit_move(if i % 2 == 0 { white } else { black }, gid, mv)
+                    .unwrap();
+                let GameEvent::StateUpdated {
+                    game: wg,
+                    finished_reason: reason,
+                    ..
+                } = wrx.try_recv().unwrap()
+                else {
+                    panic!()
+                };
+                let GameEvent::StateUpdated { game: bg, .. } = brx.try_recv().unwrap() else {
+                    panic!()
+                };
+                assert_eq!(wg.fen(), bg.fen());
+                assert_eq!(wg.san_history(), bg.san_history());
+                assert_eq!(reason.is_some(), i == moves.len() - 1);
+                if reason.is_some() {
+                    assert!(wg.is_checkmate());
+                }
+            }
+            assert!(manager.submit_move(white, gid, "e4").is_err());
+            assert_released(&mut manager, gid, white, black);
+        }
+    }
+
+    #[test]
+    fn resign_and_agreed_draw_release_both_players() {
+        for draw in [false, true] {
+            let (mut manager, gid, white, black, mut wrx, mut brx) = matched();
+            if draw {
+                manager.offer_draw(white, gid).unwrap();
+                assert!(matches!(
+                    brx.try_recv().unwrap(),
+                    GameEvent::DrawOffered { .. }
+                ));
+                manager.offer_draw(black, gid).unwrap();
+            } else {
+                manager.resign_game(white, gid).unwrap();
+            }
+            for rx in [&mut wrx, &mut brx] {
+                let GameEvent::StateUpdated {
+                    game,
+                    finished_reason,
+                    ..
+                } = rx.try_recv().unwrap()
+                else {
+                    panic!()
+                };
+                assert!(finished_reason.is_some());
+                assert_eq!(
+                    game.result(),
+                    if draw {
+                        GameResult::Draw
+                    } else {
+                        GameResult::WhiteResigned
+                    }
+                );
+                assert!(rx.try_recv().is_err());
+            }
+            assert_released(&mut manager, gid, white, black);
+        }
+    }
+
+    #[test]
+    fn disconnect_finishes_once_and_releases_opponent() {
+        let (mut manager, gid, white, black, _, mut brx) = matched();
+        manager.remove_session(white);
+        manager.remove_session(white);
+        assert!(manager.get_game(gid).is_none());
+        assert_eq!(manager.get_session(black).unwrap().state, PlayerState::Idle);
+        let GameEvent::StateUpdated {
+            game,
+            finished_reason,
+            ..
+        } = brx.try_recv().unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(game.result(), GameResult::WhiteResigned);
+        assert_eq!(finished_reason.as_deref(), Some("Opponent disconnected"));
+        assert!(brx.try_recv().is_err());
+        manager.join_queue(black);
+        assert_eq!(manager.queue_size(), 1);
+    }
+
+    #[test]
+    fn stalemate_and_insufficient_material_finish_normally() {
+        for (fen, mv) in [
+            ("7k/8/5KQ1/8/8/8/8/8 w - - 0 1", "Qf7"),
+            ("7k/8/8/8/8/8/1b6/K7 w - - 0 1", "Kxb2"),
+        ] {
+            let (mut manager, gid, white, black, mut wrx, _) = matched();
+            manager.get_game_mut(gid).unwrap().game = Game::from_fen(fen).unwrap();
+            manager.submit_move(white, gid, mv).unwrap();
+            let GameEvent::StateUpdated {
+                game,
+                finished_reason,
+                ..
+            } = wrx.try_recv().unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(game.result(), GameResult::Draw);
+            assert!(finished_reason.is_some());
+            assert_released(&mut manager, gid, white, black);
+        }
+    }
+
+    #[test]
+    fn queue_rejects_unknown_and_busy_players_and_removes_disconnects() {
+        let (mut manager, gid, white, _, _, _) = matched();
+        manager.join_queue(white);
+        manager.join_queue(SessionId::new());
+        manager.leave_queue(white);
+        assert_eq!(manager.queue_size(), 0);
+        assert_eq!(manager.get_player_game_id(white), Some(gid));
+        let id = SessionId::new();
+        manager.add_session(id, TerminalSize::default());
+        manager.join_queue(id);
+        manager.join_queue(id);
+        assert_eq!(manager.queue_size(), 1);
+        manager.remove_session(id);
+        assert_eq!(manager.queue_size(), 0);
     }
 }

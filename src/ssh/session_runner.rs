@@ -2,20 +2,19 @@ use std::sync::Arc;
 
 use ratatui::backend::Backend;
 use ratatui::Terminal;
-use shakmaty::Square;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info};
 
 use crate::server::SessionManager;
 use crate::ssh::session::{GameEvent, SessionId};
-use crate::ui::{parse_input, App, AppAction, AppView, GameOverReason, InputEvent, SshBackend};
+use crate::ui::{parse_input, App, AppAction, AppView, InputEvent, SshBackend};
 
 pub struct SessionRunner {
     session_id: SessionId,
     session_manager: Arc<RwLock<SessionManager>>,
     input_rx: mpsc::Receiver<Vec<u8>>,
     output_tx: mpsc::Sender<Vec<u8>>,
-    game_event_rx: mpsc::Receiver<GameEvent>,
+    game_event_rx: mpsc::UnboundedReceiver<GameEvent>,
     width: u16,
     height: u16,
 }
@@ -26,7 +25,7 @@ impl SessionRunner {
         session_manager: Arc<RwLock<SessionManager>>,
         input_rx: mpsc::Receiver<Vec<u8>>,
         output_tx: mpsc::Sender<Vec<u8>>,
-        game_event_rx: mpsc::Receiver<GameEvent>,
+        game_event_rx: mpsc::UnboundedReceiver<GameEvent>,
         width: u16,
         height: u16,
     ) -> Self {
@@ -103,10 +102,6 @@ impl SessionRunner {
                 }
 
                 _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
-                    if app.view() == AppView::InQueue {
-                        self.check_for_match(&mut app, &mut current_game_id).await;
-                    }
-
                     let manager = self.session_manager.read().await;
                     app.set_online_count(manager.session_count());
                     app.set_queue_size(manager.queue_size());
@@ -114,9 +109,10 @@ impl SessionRunner {
             }
         }
 
-        if let Some(game_id) = current_game_id {
-            self.handle_disconnect(game_id).await;
-        }
+        self.session_manager
+            .write()
+            .await
+            .remove_session(self.session_id);
 
         let _ = terminal.clear();
         let _ = terminal.show_cursor();
@@ -138,65 +134,88 @@ impl SessionRunner {
     ) {
         match action {
             AppAction::JoinQueue => {
-                app.join_queue();
                 let mut manager = self.session_manager.write().await;
                 manager.join_queue(self.session_id);
-                app.set_queue_size(manager.queue_size());
-
-                if let Some(game_id) = manager.try_match() {
-                    drop(manager);
-                    self.notify_matched_players(game_id).await;
-                }
+                app.join_queue();
+                manager.try_match();
             }
             AppAction::LeaveQueue => {
-                app.leave_queue();
                 let mut manager = self.session_manager.write().await;
-                manager.leave_queue(self.session_id);
-                app.set_queue_size(manager.queue_size());
+                // A match may already have been assigned while Esc was in flight.
+                if manager.get_player_game_id(self.session_id).is_none() {
+                    manager.leave_queue(self.session_id);
+                    app.leave_queue();
+                }
             }
-            AppAction::Quit => {
-                app.set_should_quit(true);
-            }
+            AppAction::Quit => app.set_should_quit(true),
             AppAction::Resign => {
-                if let Some(game_id) = *current_game_id {
-                    self.handle_resign(app, game_id, current_game_id).await;
-                } else {
-                    app.show_game_over(GameOverReason::YouLose("You resigned".to_string()));
+                if let Some(id) = *current_game_id {
+                    if let Err(error) = self
+                        .session_manager
+                        .write()
+                        .await
+                        .resign_game(self.session_id, id)
+                    {
+                        app.set_status(Some(error));
+                    }
+                } else if let Some(game) = app.game_mut() {
+                    game.resign(game.turn());
+                    app.finish_game("Resignation".to_string());
                 }
             }
             AppAction::OfferDraw => {
-                if let Some(game_id) = *current_game_id {
-                    self.handle_draw_offer(app, game_id, current_game_id).await;
-                }
-            }
-            AppAction::SubmitMove(from, to) => {
-                if let Some(game_id) = *current_game_id {
-                    let uci = format!("{}{}", from, to);
-                    self.handle_move_text(app, game_id, &uci, current_game_id)
-                        .await;
-                } else {
-                    let uci = format!("{}{}", from, to);
-                    if let Some(game) = app.game_mut() {
-                        match game.play_uci(&uci) {
-                            Ok(_) => {
-                                app.set_status(None);
-                                self.check_solo_game_over(app);
-                            }
-                            Err(e) => app.set_status(Some(format!("Invalid move: {}", e))),
-                        }
+                if let Some(id) = *current_game_id {
+                    match self
+                        .session_manager
+                        .write()
+                        .await
+                        .offer_draw(self.session_id, id)
+                    {
+                        Ok(()) => app.set_status(Some("Draw offered".to_string())),
+                        Err(error) => app.set_status(Some(error)),
                     }
                 }
             }
+            AppAction::SubmitMove(from, to) => {
+                self.submit_move(app, *current_game_id, &format!("{from}{to}"))
+                    .await;
+            }
             AppAction::SubmitMoveText(text) => {
-                if let Some(game_id) = *current_game_id {
-                    self.handle_move_text(app, game_id, &text, current_game_id)
-                        .await;
+                self.submit_move(app, *current_game_id, &text).await;
+            }
+            AppAction::ReturnToLobby => *current_game_id = None,
+            AppAction::None => {}
+        }
+        // Solo moves can be played directly by the UI as well as by an action.
+        if !app.is_multiplayer() && app.view() == AppView::Game {
+            if let Some(game) = app.game() {
+                if game.is_game_over() {
+                    let reason = if game.is_checkmate() {
+                        "Checkmate"
+                    } else if game.is_stalemate() {
+                        "Stalemate"
+                    } else {
+                        "Insufficient material"
+                    };
+                    app.finish_game(reason.to_string());
                 }
             }
-            AppAction::ReturnToLobby => {
-                *current_game_id = None;
-            }
-            AppAction::None => {}
+        }
+    }
+
+    async fn submit_move(&self, app: &mut App, game_id: Option<u64>, text: &str) {
+        let result = if let Some(id) = game_id {
+            self.session_manager
+                .write()
+                .await
+                .submit_move(self.session_id, id, text)
+        } else if let Some(game) = app.game_mut() {
+            game.play_uci(text)
+        } else {
+            return;
+        };
+        if let Err(error) = result {
+            app.set_status(Some(error));
         }
     }
 
@@ -212,266 +231,158 @@ impl SessionRunner {
                 opponent_name,
                 is_white,
             } => {
-                *current_game_id = Some(game_id);
-                app.start_game(opponent_name, !is_white);
+                if *current_game_id != Some(game_id) && app.view() == AppView::InQueue {
+                    *current_game_id = Some(game_id);
+                    app.start_game(opponent_name, !is_white);
+                }
             }
-            GameEvent::MovePlayed {
-                from,
-                to,
-                promotion,
+            GameEvent::StateUpdated {
+                game_id,
+                game,
+                finished_reason,
             } => {
-                let uci = match promotion {
-                    Some(p) => format!("{}{}{}", from, to, p),
-                    None => format!("{}{}", from, to),
-                };
-                if let Some(game) = app.game_mut() {
-                    let _ = game.play_uci(&uci);
-                    self.check_game_over(app, current_game_id);
+                if *current_game_id != Some(game_id) {
+                    return;
+                }
+                app.update_game(game);
+                if let Some(reason) = finished_reason {
+                    app.finish_game(reason);
+                    *current_game_id = None;
                 }
             }
-            GameEvent::DrawOffered => {
-                app.set_status(Some("Opponent offers a draw. /draw to accept".to_string()));
-            }
-            GameEvent::DrawAccepted => {
-                if let Some(game) = app.game_mut() {
-                    game.set_result(crate::chess::GameResult::Draw);
-                }
-                app.show_game_over(GameOverReason::Draw("Draw by agreement".to_string()));
-                *current_game_id = None;
-            }
-            GameEvent::DrawDeclined => {
-                app.set_status(Some("Draw declined".to_string()));
-            }
-            GameEvent::OpponentResigned => {
-                app.show_game_over(GameOverReason::YouWin("Opponent resigned".to_string()));
-                *current_game_id = None;
-            }
-            GameEvent::OpponentDisconnected => {
-                app.show_game_over(GameOverReason::YouWin("Opponent disconnected".to_string()));
-                *current_game_id = None;
-            }
-            GameEvent::GameEnded { reason } => {
-                app.show_game_over(GameOverReason::Draw(reason));
-                *current_game_id = None;
-            }
-        }
-    }
-
-    fn check_game_over(&self, app: &mut App, current_game_id: &mut Option<u64>) {
-        if let Some(game) = app.game() {
-            if game.is_checkmate() {
-                let loser_turn = game.turn();
-                let reason = if (loser_turn == shakmaty::Color::White && app.is_my_turn())
-                    || (loser_turn == shakmaty::Color::Black && !app.is_my_turn())
-                {
-                    GameOverReason::YouLose("Checkmate".to_string())
-                } else {
-                    GameOverReason::YouWin("Checkmate".to_string())
-                };
-                app.show_game_over(reason);
-                *current_game_id = None;
-            } else if game.is_stalemate() {
-                app.show_game_over(GameOverReason::Draw("Stalemate".to_string()));
-                *current_game_id = None;
-            }
-        }
-    }
-
-    fn check_solo_game_over(&self, app: &mut App) {
-        if let Some(game) = app.game() {
-            if game.is_checkmate() {
-                let loser_turn = game.turn();
-                let reason = if loser_turn == shakmaty::Color::White {
-                    GameOverReason::YouLose("Checkmate - Black wins".to_string())
-                } else {
-                    GameOverReason::YouWin("Checkmate - White wins".to_string())
-                };
-                app.show_game_over(reason);
-            } else if game.is_stalemate() {
-                app.show_game_over(GameOverReason::Draw("Stalemate".to_string()));
-            }
-        }
-    }
-
-    async fn check_for_match(&mut self, app: &mut App, current_game_id: &mut Option<u64>) {
-        let manager = self.session_manager.read().await;
-        if let Some(game_id) = manager.get_player_game_id(self.session_id) {
-            if let Some(info) = manager.get_match_info(game_id) {
-                let is_white = info.white_id == self.session_id;
-                let opponent_name = if is_white {
-                    info.black_name.clone()
-                } else {
-                    info.white_name.clone()
-                };
-                *current_game_id = Some(game_id);
-                app.start_game(opponent_name, !is_white);
-            }
-        }
-    }
-
-    async fn notify_matched_players(&self, game_id: u64) {
-        let manager = self.session_manager.read().await;
-        if let Some(info) = manager.get_match_info(game_id) {
-            if let Some(tx) = manager.get_game_event_tx(info.white_id) {
-                let _ = tx
-                    .send(GameEvent::MatchFound {
-                        game_id,
-                        opponent_name: info.black_name.clone(),
-                        is_white: true,
-                    })
-                    .await;
-            }
-            if let Some(tx) = manager.get_game_event_tx(info.black_id) {
-                let _ = tx
-                    .send(GameEvent::MatchFound {
-                        game_id,
-                        opponent_name: info.white_name.clone(),
-                        is_white: false,
-                    })
-                    .await;
-            }
-        }
-    }
-
-    async fn handle_move_text(
-        &self,
-        app: &mut App,
-        game_id: u64,
-        text: &str,
-        current_game_id: &mut Option<u64>,
-    ) {
-        let mut manager = self.session_manager.write().await;
-
-        if let Some(game_session) = manager.get_game_mut(game_id) {
-            match game_session.play_move_text(self.session_id, text) {
-                Ok(uci) => {
-                    if let Some(game) = app.game_mut() {
-                        let _ = game.play_uci(&uci);
-                    }
-                    app.set_status(None);
-
-                    let opponent_id = game_session.get_opponent(self.session_id);
-                    drop(manager);
-
-                    if let Some(opp_id) = opponent_id {
-                        if uci.len() >= 4 {
-                            if let (Ok(from), Ok(to)) =
-                                (uci[0..2].parse::<Square>(), uci[2..4].parse::<Square>())
-                            {
-                                let promotion = uci.chars().nth(4);
-                                let manager = self.session_manager.read().await;
-                                if let Some(tx) = manager.get_game_event_tx(opp_id) {
-                                    let _ = tx
-                                        .send(GameEvent::MovePlayed {
-                                            from,
-                                            to,
-                                            promotion,
-                                        })
-                                        .await;
-                                }
-                            }
-                        }
-                    }
-
-                    self.check_game_over(app, current_game_id);
-                }
-                Err(e) => {
-                    app.set_status(Some(e.to_string()));
+            GameEvent::DrawOffered { game_id } => {
+                if *current_game_id == Some(game_id) {
+                    app.set_status(Some("Opponent offers a draw. /draw to accept".to_string()));
                 }
             }
         }
     }
+}
 
-    async fn handle_resign(&self, app: &mut App, game_id: u64, current_game_id: &mut Option<u64>) {
-        let mut manager = self.session_manager.write().await;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chess::Game;
+    use crate::ssh::session::TerminalSize;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
-        if let Some(game_session) = manager.get_game_mut(game_id) {
-            if game_session.resign(self.session_id).is_ok() {
-                let opponent_id = game_session.get_opponent(self.session_id);
-                drop(manager);
-
-                if let Some(opp_id) = opponent_id {
-                    let manager = self.session_manager.read().await;
-                    if let Some(tx) = manager.get_game_event_tx(opp_id) {
-                        let _ = tx.send(GameEvent::OpponentResigned).await;
-                    }
-                }
-
-                app.show_game_over(GameOverReason::YouLose("You resigned".to_string()));
-                *current_game_id = None;
-            }
-        }
+    fn runner() -> SessionRunner {
+        let (_, input) = mpsc::channel(8);
+        let (output, _) = mpsc::channel(8);
+        let (_, events) = mpsc::unbounded_channel();
+        SessionRunner::new(
+            SessionId::new(),
+            Arc::new(RwLock::new(SessionManager::new())),
+            input,
+            output,
+            events,
+            80,
+            24,
+        )
     }
 
-    async fn handle_disconnect(&self, game_id: u64) {
-        let mut manager = self.session_manager.write().await;
-
-        if let Some(game_session) = manager.get_game(game_id) {
-            let opponent_id = game_session.get_opponent(self.session_id);
-            drop(manager);
-
-            if let Some(opp_id) = opponent_id {
-                let manager = self.session_manager.read().await;
-                if let Some(tx) = manager.get_game_event_tx(opp_id) {
-                    let _ = tx.send(GameEvent::OpponentDisconnected).await;
-                }
-            }
-
-            let mut manager = self.session_manager.write().await;
-            manager.end_game(game_id);
-        } else {
-            manager.end_game(game_id);
+    #[tokio::test]
+    async fn final_snapshot_is_applied_before_game_over_and_old_events_are_ignored() {
+        let mut runner = runner();
+        let mut app = App::new("player".into());
+        app.join_queue();
+        let mut current = None;
+        runner
+            .handle_game_event(
+                &mut app,
+                GameEvent::MatchFound {
+                    game_id: 1,
+                    opponent_name: "opponent".into(),
+                    is_white: true,
+                },
+                &mut current,
+            )
+            .await;
+        let mut game = Game::new();
+        for mv in ["f3", "e5", "g4", "Qh4#"] {
+            game.play_san(mv).unwrap();
         }
+        let fen = game.fen();
+        runner
+            .handle_game_event(
+                &mut app,
+                GameEvent::StateUpdated {
+                    game_id: 1,
+                    game,
+                    finished_reason: Some("Checkmate".into()),
+                },
+                &mut current,
+            )
+            .await;
+        assert_eq!(app.view(), AppView::GameOver);
+        assert_eq!(app.game().unwrap().fen(), fen);
+        assert_eq!(current, None);
+        app.return_to_lobby();
+        app.join_queue();
+        runner
+            .handle_game_event(
+                &mut app,
+                GameEvent::MatchFound {
+                    game_id: 2,
+                    opponent_name: "next".into(),
+                    is_white: false,
+                },
+                &mut current,
+            )
+            .await;
+        runner
+            .handle_game_event(
+                &mut app,
+                GameEvent::StateUpdated {
+                    game_id: 1,
+                    game: Game::new(),
+                    finished_reason: Some("old event".into()),
+                },
+                &mut current,
+            )
+            .await;
+        assert_eq!(app.view(), AppView::Game);
+        assert_eq!(current, Some(2));
     }
 
-    async fn handle_draw_offer(
-        &self,
-        app: &mut App,
-        game_id: u64,
-        current_game_id: &mut Option<u64>,
-    ) {
-        let mut manager = self.session_manager.write().await;
-
-        if let Some(game_session) = manager.get_game_mut(game_id) {
-            let had_pending_offer = game_session.has_pending_draw_offer_for(self.session_id);
-
-            match game_session.offer_draw(self.session_id) {
-                Ok(_) => {
-                    if had_pending_offer {
-                        if let Some(game) = app.game_mut() {
-                            game.set_result(crate::chess::GameResult::Draw);
-                        }
-
-                        let opponent_id = game_session.get_opponent(self.session_id);
-                        drop(manager);
-
-                        if let Some(opp_id) = opponent_id {
-                            let manager = self.session_manager.read().await;
-                            if let Some(tx) = manager.get_game_event_tx(opp_id) {
-                                let _ = tx.send(GameEvent::DrawAccepted).await;
-                            }
-                        }
-
-                        app.show_game_over(GameOverReason::Draw("Draw by agreement".to_string()));
-                        *current_game_id = None;
-                    } else {
-                        app.set_status(Some("Draw offered".to_string()));
-
-                        let opponent_id = game_session.get_opponent(self.session_id);
-                        drop(manager);
-
-                        if let Some(opp_id) = opponent_id {
-                            let manager = self.session_manager.read().await;
-                            if let Some(tx) = manager.get_game_event_tx(opp_id) {
-                                let _ = tx.send(GameEvent::DrawOffered).await;
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    app.set_status(Some(format!("Error: {}", e)));
-                }
+    #[tokio::test]
+    async fn solo_typed_mate_enters_finished_state() {
+        let mut runner = runner();
+        let mut app = App::new("solo".into());
+        app.start_solo_game();
+        let mut current = None;
+        for text in ["f3", "e5", "g4", "Qh4"] {
+            for key in text.chars().map(KeyCode::Char).chain([KeyCode::Enter]) {
+                let action = app.handle_input(InputEvent::Key(key, KeyModifiers::NONE));
+                runner.handle_action(&mut app, action, &mut current).await;
             }
         }
+        assert_eq!(app.view(), AppView::GameOver);
+        assert!(app.game().unwrap().is_checkmate());
+    }
+
+    #[tokio::test]
+    async fn cancel_after_match_assignment_does_not_abandon_game() {
+        let mut runner = runner();
+        let mut app = App::new("player".into());
+        app.join_queue();
+        {
+            let mut manager = runner.session_manager.write().await;
+            for id in [runner.session_id, SessionId::new()] {
+                manager.add_session(id, TerminalSize::default());
+                manager.join_queue(id);
+            }
+            manager.try_match().unwrap();
+        }
+        runner
+            .handle_action(&mut app, AppAction::LeaveQueue, &mut None)
+            .await;
+        assert_eq!(app.view(), AppView::InQueue);
+        assert!(runner
+            .session_manager
+            .read()
+            .await
+            .get_player_game_id(runner.session_id)
+            .is_some());
     }
 }

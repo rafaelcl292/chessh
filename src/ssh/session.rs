@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 
-use shakmaty::Square;
+use crate::chess::Game;
 
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -12,18 +12,13 @@ pub enum GameEvent {
         opponent_name: String,
         is_white: bool,
     },
-    MovePlayed {
-        from: Square,
-        to: Square,
-        promotion: Option<char>,
+    StateUpdated {
+        game_id: u64,
+        game: Game,
+        finished_reason: Option<String>,
     },
-    DrawOffered,
-    DrawAccepted,
-    DrawDeclined,
-    OpponentResigned,
-    OpponentDisconnected,
-    GameEnded {
-        reason: String,
+    DrawOffered {
+        game_id: u64,
     },
 }
 
