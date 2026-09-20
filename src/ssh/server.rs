@@ -37,6 +37,7 @@ impl SshServer {
             auth_rejection_time: std::time::Duration::from_secs(1),
             auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
             keys: vec![config.host_key],
+            nodelay: true,
             ..Default::default()
         };
 

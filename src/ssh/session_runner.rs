@@ -62,23 +62,26 @@ impl SessionRunner {
         let mut app = App::new(username);
         let mut current_game_id: Option<u64> = None;
 
-        {
+        let mut lobby_counts = {
             let manager = self.session_manager.read().await;
-            app.set_online_count(manager.session_count());
-            app.set_queue_size(manager.queue_size());
-        }
+            (manager.session_count(), manager.queue_size())
+        };
+        app.set_online_count(lobby_counts.0);
+        app.set_queue_size(lobby_counts.1);
+        let mut dirty = true;
 
         loop {
             if app.should_quit() {
                 break;
             }
 
-            app.set_area(ratatui::layout::Rect::new(0, 0, self.width, self.height));
-            if let Err(e) = terminal.draw(|frame| {
-                app.draw(frame);
-            }) {
-                error!("Failed to draw: {}", e);
-                break;
+            if dirty {
+                app.set_area(ratatui::layout::Rect::new(0, 0, self.width, self.height));
+                if let Err(e) = terminal.draw(|frame| app.draw(frame)) {
+                    error!("Failed to draw: {}", e);
+                    break;
+                }
+                dirty = false;
             }
 
             tokio::select! {
@@ -86,6 +89,8 @@ impl SessionRunner {
                     match input {
                         Some(data) => {
                             for event in decoder.feed(&data) {
+                                if matches!(event, InputEvent::Unknown) { continue; }
+                                dirty = true;
                                 let action = app.handle_input(event);
                                 self.handle_action(&mut app, action, &mut current_game_id).await;
                                 if let InputEvent::Resize(w, h) = event {
@@ -106,18 +111,25 @@ impl SessionRunner {
 
                 game_event = self.game_event_rx.recv() => {
                     if let Some(event) = game_event {
+                        dirty = true;
                         self.handle_game_event(&mut app, event, &mut current_game_id).await;
                     }
                 }
 
                 _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
                     if let Some(event) = decoder.flush_escape() {
+                        dirty = true;
                         let action = app.handle_input(event);
                         self.handle_action(&mut app, action, &mut current_game_id).await;
                     }
                     let manager = self.session_manager.read().await;
-                    app.set_online_count(manager.session_count());
-                    app.set_queue_size(manager.queue_size());
+                    let counts = (manager.session_count(), manager.queue_size());
+                    if counts != lobby_counts {
+                        lobby_counts = counts;
+                        app.set_online_count(counts.0);
+                        app.set_queue_size(counts.1);
+                        dirty |= matches!(app.view(), AppView::Lobby | AppView::InQueue);
+                    }
                 }
             }
         }
@@ -306,6 +318,38 @@ mod tests {
             80,
             24,
         )
+    }
+
+    #[tokio::test]
+    async fn idle_session_stays_quiet_and_input_redraws_immediately() {
+        let mut runner = runner();
+        let (input_tx, input_rx) = mpsc::channel(8);
+        let (output_tx, mut output_rx) = mpsc::channel(32);
+        let (_events_tx, events_rx) = mpsc::unbounded_channel();
+        runner.input_rx = input_rx;
+        runner.output_tx = output_tx;
+        runner.game_event_rx = events_rx;
+        let task = tokio::spawn(runner.run("latency-test".into()));
+        // Mouse setup and initial frame.
+        for _ in 0..2 {
+            tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(250), output_rx.recv())
+                .await
+                .is_err()
+        );
+        input_tx.send(b"\x1b[B".to_vec()).await.unwrap();
+        let frame = tokio::time::timeout(std::time::Duration::from_millis(80), output_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!frame.is_empty());
+        drop(input_tx);
+        task.await.unwrap();
     }
 
     #[tokio::test]
