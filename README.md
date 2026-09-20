@@ -40,6 +40,20 @@ Keep this file across restarts and deployments so SSH clients recognize the serv
 An invalid or unreadable existing key stops startup instead of silently replacing
 its identity.
 
+## Game history
+
+Multiplayer games are saved to `game_history.jsonl` when they finish, including
+player names, result (`1-0`, `0-1`, `1/2-1/2`), termination reason, SAN moves,
+final FEN and a Unix timestamp. `/solo` is a local practice board and is not archived.
+Set `CHESSH_HISTORY_PATH` to choose another file; its parent directory must exist.
+
+The history is loaded at startup and game IDs continue from the highest saved ID.
+Only one server can write a history file at a time. Completed records are synced
+to disk; an incomplete final append is recovered on startup, while corrupt complete
+records produce an error. Write failures are logged and retained in memory for retry
+on the next completed game or graceful shutdown. SIGINT/SIGTERM archives active
+games with result `*` and reason `Server shutdown`.
+
 ## Playing
 
 Use `/play` to join matchmaking or `/solo` to play both sides locally. Enter moves

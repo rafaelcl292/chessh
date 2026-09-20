@@ -8,6 +8,7 @@ use tracing_subscriber::FmtSubscriber;
 
 use chessh::server::SessionManager;
 use chessh::ssh::{load_or_create_host_key, SshServer, SshServerConfig};
+use chessh::storage::GameHistory;
 use chessh::ui::init_sprites;
 
 const DEFAULT_PORT: u16 = 2222;
@@ -30,22 +31,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address: SocketAddr = format!("0.0.0.0:{}", DEFAULT_PORT).parse()?;
     let config = SshServerConfig::new(address, host_key);
 
-    let session_manager = Arc::new(RwLock::new(SessionManager::new()));
+    let history_path = std::env::var_os("CHESSH_HISTORY_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "game_history.jsonl".into());
+    let history = GameHistory::open(&history_path)?;
+    info!(
+        "Loaded {} games from {}",
+        history.get_records().len(),
+        history_path.display()
+    );
+    let session_manager = Arc::new(RwLock::new(SessionManager::with_history(history)));
 
-    let server = SshServer::new(session_manager);
+    let server = SshServer::new(session_manager.clone());
 
     info!("Connect with: ssh -p {} localhost", DEFAULT_PORT);
 
-    tokio::select! {
-        result = server.run(config) => {
-            if let Err(e) = result {
-                tracing::error!("Server error: {}", e);
-            }
-        }
+    let result = tokio::select! {
+        result = server.run(config) => result,
         _ = shutdown_signal() => {
             info!("Shutdown signal received, stopping server...");
+            Ok(())
         }
-    }
+    };
+    session_manager.write().await.shutdown()?;
+    result?;
 
     info!("Server stopped");
     Ok(())

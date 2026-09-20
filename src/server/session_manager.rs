@@ -3,6 +3,9 @@ use std::collections::{HashMap, VecDeque};
 use rand::RngExt;
 use tokio::sync::mpsc;
 
+use crate::chess::GameResult;
+use crate::storage::{GameHistory, GameRecord};
+
 use crate::ssh::session::{GameEvent, SessionId, TerminalSize};
 
 use super::GameSession;
@@ -36,15 +39,21 @@ pub struct SessionManager {
     queue: VecDeque<SessionId>,
     games: HashMap<u64, GameSession>,
     next_game_id: u64,
+    history: GameHistory,
 }
 
 impl SessionManager {
     pub fn new() -> Self {
+        Self::with_history(GameHistory::new())
+    }
+
+    pub fn with_history(history: GameHistory) -> Self {
         Self {
             sessions: HashMap::new(),
             queue: VecDeque::new(),
             games: HashMap::new(),
-            next_game_id: 1,
+            next_game_id: history.next_id(),
+            history,
         }
     }
 
@@ -258,8 +267,33 @@ impl SessionManager {
             .and_then(|s| s.game_event_tx.clone())
     }
 
-    pub fn end_game(&mut self, game_id: u64) -> Option<(SessionId, SessionId)> {
+    fn end_game(&mut self, game_id: u64, reason: &str) -> Option<(SessionId, SessionId)> {
+        let info = self.get_match_info(game_id)?;
         let game = self.games.remove(&game_id)?;
+        let result = match game.game.result() {
+            GameResult::WhiteWins | GameResult::BlackResigned => "1-0",
+            GameResult::BlackWins | GameResult::WhiteResigned => "0-1",
+            GameResult::Draw => "1/2-1/2",
+            GameResult::Ongoing => "*",
+        };
+        let record = GameRecord {
+            id: game_id,
+            white_player: info.white_name,
+            black_player: info.black_name,
+            result: result.to_string(),
+            reason: reason.to_string(),
+            moves: game.game.san_history().to_vec(),
+            final_fen: game.game.fen(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+        if let Err(error) = self.history.add_record(record) {
+            tracing::error!(
+                "Failed to persist game {game_id}; retained in memory for retry: {error}"
+            );
+        }
         let white_id = game.white_player;
         let black_id = game.black_player;
 
@@ -297,7 +331,7 @@ impl SessionManager {
 
     fn finish_game(&mut self, game_id: u64, reason: &str) {
         self.publish_state(game_id, Some(reason.to_string()));
-        self.end_game(game_id);
+        self.end_game(game_id, reason);
     }
 
     pub fn submit_move(&mut self, id: SessionId, game_id: u64, text: &str) -> Result<(), String> {
@@ -336,6 +370,18 @@ impl SessionManager {
             self.send_event(opponent, GameEvent::DrawOffered { game_id });
         }
         Ok(())
+    }
+
+    pub fn history(&self) -> &GameHistory {
+        &self.history
+    }
+
+    pub fn shutdown(&mut self) -> std::io::Result<()> {
+        let ids: Vec<_> = self.games.keys().copied().collect();
+        for id in ids {
+            self.end_game(id, "Server shutdown");
+        }
+        self.history.flush()
     }
 
     pub fn find_by_username(&self, username: &str) -> Option<&PlayerSession> {
@@ -401,6 +447,8 @@ mod tests {
 
     fn assert_released(manager: &mut SessionManager, gid: u64, white: SessionId, black: SessionId) {
         assert!(manager.get_game(gid).is_none());
+        assert_eq!(manager.history().get_records().len(), 1);
+        assert_eq!(manager.history().get_records()[0].id, gid);
         for id in [white, black] {
             assert_eq!(manager.get_session(id).unwrap().state, PlayerState::Idle);
             manager.join_queue(id);
@@ -525,6 +573,47 @@ mod tests {
             assert!(finished_reason.is_some());
             assert_released(&mut manager, gid, white, black);
         }
+    }
+
+    #[test]
+    fn persistence_records_disconnect_and_shutdown_and_resumes_ids() {
+        let path =
+            std::env::temp_dir().join(format!("chessh-session-history-{}", rand::random::<u64>()));
+        let (mut manager, gid, white, black, _, _) = matched();
+        manager.history = GameHistory::open(&path).unwrap();
+        manager.set_username(white, "Alice".into());
+        manager.set_username(black, "Bob".into());
+        manager.submit_move(white, gid, "e4").unwrap();
+        let fen = manager.get_game(gid).unwrap().game.fen();
+        manager.remove_session(white);
+        manager.remove_session(white);
+        let record = &manager.history().get_records()[0];
+        assert_eq!(record.white_player, "Alice");
+        assert_eq!(record.black_player, "Bob");
+        assert_eq!(record.result, "0-1");
+        assert_eq!(record.final_fen, fen);
+        assert_eq!(record.moves, ["e4"]);
+        manager.add_session(white, TerminalSize::default());
+        manager.join_queue(white);
+        manager.join_queue(black);
+        let next = manager.try_match().unwrap();
+        manager.shutdown().unwrap();
+        manager.shutdown().unwrap();
+        assert_eq!(manager.history().get_records().len(), 2);
+        assert!(manager.get_game(next).is_none());
+        drop(manager);
+        let mut restarted = SessionManager::with_history(GameHistory::open(&path).unwrap());
+        let records = restarted.history().get_records();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[1].reason, "Server shutdown");
+        assert_eq!(records[1].result, "*");
+        for id in [white, black] {
+            restarted.add_session(id, TerminalSize::default());
+            restarted.join_queue(id);
+        }
+        assert!(restarted.try_match().unwrap() > next);
+        drop(restarted);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
