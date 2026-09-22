@@ -181,7 +181,7 @@ impl Handler for ConnectionHandler {
         self.channel_writers.insert(channel, input_tx);
 
         let output_handle = handle.clone();
-        tokio::spawn(async move {
+        let output_task = tokio::spawn(async move {
             while let Some(data) = output_rx.recv().await {
                 let _ = output_handle.data(channel, data).await;
             }
@@ -215,6 +215,9 @@ impl Handler for ConnectionHandler {
                 manager.remove_session(session_id);
             }
 
+            // Drain terminal restoration and goodbye output before closing SSH.
+            let _ = output_task.await;
+            let _ = handle.exit_status_request(channel, 0).await;
             let _ = handle.eof(channel).await;
             let _ = handle.close(channel).await;
         });
@@ -258,14 +261,10 @@ impl Handler for ConnectionHandler {
         &mut self,
         channel: ChannelId,
         data: &[u8],
-        session: &mut RusshSession,
+        _session: &mut RusshSession,
     ) -> Result<(), Self::Error> {
         if let Some(tx) = self.channel_writers.get(&channel) {
             let _ = tx.send(data.to_vec()).await;
-        }
-
-        if data == b"\x03" {
-            let _ = session.close(channel);
         }
 
         Ok(())

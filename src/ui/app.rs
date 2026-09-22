@@ -258,6 +258,12 @@ impl App {
     }
 
     pub fn handle_input(&mut self, event: InputEvent) -> AppAction {
+        if matches!(event, InputEvent::Key(KeyCode::Char('c' | 'd'), modifiers)
+            if modifiers.contains(crossterm::event::KeyModifiers::CONTROL))
+        {
+            self.should_quit = true;
+            return AppAction::Quit;
+        }
         if self.confirmation.is_some() {
             return self.handle_confirmation(event);
         }
@@ -268,18 +274,6 @@ impl App {
         }
         match event {
             InputEvent::Click(x, y) => self.handle_click(x, y),
-            InputEvent::Key(KeyCode::Char('c'), modifiers)
-                if modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
-            {
-                self.should_quit = true;
-                AppAction::Quit
-            }
-            InputEvent::Key(KeyCode::Char('d'), modifiers)
-                if modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
-            {
-                self.should_quit = true;
-                AppAction::Quit
-            }
             InputEvent::Key(KeyCode::Char(c), modifiers)
                 if modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
                     && (c == '+' || c == '-' || c == '=' || c == '_' || c == '^') =>

@@ -128,6 +128,9 @@ it forfeits the game. Dialogs default to Cancel: use **Tab** then **Enter**, **Y
 or click Confirm to proceed; **Esc** cancels. Slash commands use the same dialogs.
 Draw offers are disabled in practice mode.
 
+Press **Ctrl+C** to disconnect immediately, including while a dialog is open.
+The terminal is restored before SSH closes. Leaving an online game forfeits it.
+
 After checkmate, a draw, resignation or disconnection, the final board stays visible
 with the result and move history. Moves are disabled so you can inspect the position
 for as long as you like. Press **Enter** to return to the lobby and start another

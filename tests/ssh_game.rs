@@ -53,6 +53,35 @@ async fn read_until(channel: &mut Channel<client::Msg>, expected: &str) {
     .unwrap_or_else(|_| panic!("did not render {expected:?}"));
 }
 
+async fn assert_clean_exit(channel: &mut Channel<client::Msg>) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut output = Vec::new();
+        let mut exited = false;
+        let mut eof = false;
+        loop {
+            match channel.wait().await.expect("channel ended before close") {
+                ChannelMsg::Data { data } => {
+                    assert!(!exited && !eof, "output arrived after exit");
+                    output.extend_from_slice(&data);
+                }
+                ChannelMsg::ExitStatus { exit_status } => {
+                    assert_eq!(exit_status, 0);
+                    exited = true;
+                }
+                ChannelMsg::Eof => eof = true,
+                ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+        assert!(exited && eof);
+        let output = String::from_utf8_lossy(&output);
+        assert!(output.contains("\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[0m"));
+        assert!(output.contains("Goodbye!"));
+    })
+    .await
+    .expect("clean SSH exit timed out");
+}
+
 async fn type_text(channel: &Channel<client::Msg>, text: &str) {
     // Individual SSH data messages emulate typed keys.
     for byte in text.bytes() {
@@ -94,6 +123,18 @@ async fn ssh_players_can_finish_review_rematch_draw_and_disconnect() {
         let server_task = tokio::spawn(async move {
             server.run_on_socket(config, &listener).await.unwrap();
         });
+        for queued in [false, true] {
+            let (handle, mut channel) = connect(address, "interrupt-test").await;
+            if queued {
+                type_text(&channel, "\r").await;
+                read_until(&mut channel, "Searching for opponent").await;
+            }
+            type_text(&channel, "\x03").await;
+            assert_clean_exit(&mut channel).await;
+            assert_eq!(manager.read().await.session_count(), 0);
+            assert_eq!(manager.read().await.queue_size(), 0);
+            drop(handle);
+        }
         let (alice_handle, mut alice) = connect(address, "alice").await;
         let (bob_handle, mut bob) = connect(address, "bob").await;
         type_text(&alice, "\r").await;
@@ -195,15 +236,18 @@ async fn ssh_players_can_finish_review_rematch_draw_and_disconnect() {
         let (third, _) = wait_for_match(&manager, next).await;
         read_until(&mut alice, "Moves").await;
         read_until(&mut bob, "Moves").await;
-        alice_handle
-            .disconnect(russh::Disconnect::ByApplication, "test", "en")
-            .await
-            .unwrap();
+        // Ctrl+C also exits while an in-game confirmation dialog is open.
+        type_text(&alice, "/quit\r").await;
+        read_until(&mut alice, "Confirm action").await;
+        type_text(&alice, "\x03").await;
+        assert_clean_exit(&mut alice).await;
+        assert!(manager.read().await.find_by_username("alice").is_none());
+        drop(alice_handle);
         read_until(&mut bob, "YOU WIN").await;
         assert!(manager.read().await.get_game(third).is_none());
         assert_eq!(manager.read().await.history().get_records().len(), 3);
         type_text(&bob, "q").await;
-        read_until(&mut bob, "Goodbye!").await;
+        assert_clean_exit(&mut bob).await;
         drop(bob_handle);
         server_task.abort();
     })

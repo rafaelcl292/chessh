@@ -168,8 +168,6 @@ impl SessionRunner {
         let goodbye = "\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[0m\x1b[2J\x1b[H\r\nGoodbye!\r\n";
         let _ = self.output_tx.send(goodbye.as_bytes().to_vec()).await;
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
         info!("Session runner ended for {}", self.session_id);
     }
 
