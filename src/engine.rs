@@ -36,29 +36,29 @@ impl EngineWorker {
                 async fn send(input: &mut tokio::process::ChildStdin, text: &str) -> Result<(), String> {
                     input.write_all(text.as_bytes()).await.map_err(|e| e.to_string())
                 }
-                async fn until(lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>, prefix: &str) -> Result<String, String> {
-                    tokio::time::timeout(Duration::from_secs(15), async {
+                async fn until(lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>, prefix: &str, seconds: u64) -> Result<String, String> {
+                    tokio::time::timeout(Duration::from_secs(seconds), async {
                         while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
                             if line.starts_with("info string error ") { return Err(line); }
                             if line == prefix || line.starts_with(&format!("{prefix} ")) { return Ok(line); }
                         }
                         Err("Engine closed its output".into())
-                    }).await.map_err(|_| "Engine timed out".to_string())?
+                    }).await.map_err(|_| format!("Engine timed out waiting for {prefix}"))?
                 }
                 send(&mut stdin, "uci\n").await?;
-                until(&mut lines, "uciok").await?;
+                until(&mut lines, "uciok", 15).await?;
                 send(&mut stdin, &format!("setoption name Threads value 1\nsetoption name Hash value 16\nsetoption name UCI_LimitStrength value false\nsetoption name Skill Level value {}\n", level.min(20))).await?;
                 if let Some(network) = network {
                     if network.contains(['\n', '\r']) { return Err("Invalid EvalFile path".into()); }
                     send(&mut stdin, &format!("setoption name EvalFile value {network}\n")).await?;
                 }
                 send(&mut stdin, "ucinewgame\nisready\n").await?;
-                until(&mut lines, "readyok").await?;
+                until(&mut lines, "readyok", 60).await?;
                 tx.send(Ok(None)).await.map_err(|e| e.to_string())?;
                 while let Some(game) = requests.recv().await {
                     let moves = game.move_history().iter().map(|mv| mv.to_uci(shakmaty::CastlingMode::Standard).to_string()).collect::<Vec<_>>().join(" ");
                     send(&mut stdin, &format!("position startpos moves {moves}\ngo movetime 1000\n")).await?;
-                    let reply = until(&mut lines, "bestmove").await?;
+                    let reply = until(&mut lines, "bestmove", 15).await?;
                     let mv = reply.split_whitespace().nth(1).ok_or("Missing bestmove")?.to_string();
                     tx.send(Ok(Some(mv))).await.map_err(|e| e.to_string())?;
                 }

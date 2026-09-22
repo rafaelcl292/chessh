@@ -26,7 +26,7 @@ This hostname provides an SSH game, not an HTTPS website.
 - Host identity: `/var/lib/chessh/host_key`
 - Match archive: `/var/lib/chessh/game_history.jsonl`
 
-The unit limits CPU use to half a CPU and memory to 512 MiB, with a 256 MiB soft
+The unit limits CPU use to half a CPU and memory to 512 MiB, with a 384 MiB soft
 limit. It has no elevated capabilities and cannot access home directories or write
 outside its state directory and private temporary directory. These limits isolate
 resource use from other applications on the server; they are not a capacity claim.
@@ -55,7 +55,8 @@ The corresponding `CHESSH_ENGINE_PATH` and `CHESSH_ENGINE_EVAL_FILE` variables
 are set in the systemd unit. Install these assets before deploying the service.
 Each computer game starts a separate engine process inside the service's CPU
 and memory limits. Verify an actual engine reply over SSH after deployment,
-as the SSH listener check alone does not exercise Zander.
+as the SSH listener check alone does not exercise Zander. Network initialization
+has a 60-second timeout for CPU-limited hosts; searches retain a 15-second timeout.
 
 ## Release checks
 
