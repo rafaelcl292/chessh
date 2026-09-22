@@ -22,6 +22,7 @@ pub struct GameView<'a> {
     input_buffer: String,
     is_my_turn: bool,
     is_multiplayer: bool,
+    computer: bool,
     finished: Option<String>,
 }
 
@@ -80,6 +81,7 @@ impl<'a> GameView<'a> {
             input_buffer: String::new(),
             is_my_turn: true,
             is_multiplayer: false,
+            computer: false,
             finished: None,
         }
     }
@@ -122,6 +124,11 @@ impl<'a> GameView<'a> {
     ) -> Self {
         self.highlight_origins = origins;
         self.highlight_destinations = destinations;
+        self
+    }
+
+    pub fn computer(mut self, value: bool) -> Self {
+        self.computer = value;
         self
     }
 
@@ -343,6 +350,8 @@ impl GameView<'_> {
             )),
             Line::from(if self.finished.is_some() {
                 " Final position"
+            } else if self.computer {
+                " Against Zander"
             } else if self.is_multiplayer {
                 " Online game"
             } else {

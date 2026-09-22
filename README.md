@@ -11,7 +11,8 @@ board right in your terminal. All you need is an SSH client — no signup or gam
 installation required.
 
 Once connected, type `/play` and press **Enter** to find an opponent, or `/solo`
-to explore the board and play both sides yourself.
+to explore the board and play both sides yourself. Choose **Play computer** (or
+`/ai`) to challenge Zander and select its level.
 
 ![CheSSH terminal interface with a pixel-art chessboard, move history and clickable game controls](assets/screenshot.png)
 
@@ -21,6 +22,7 @@ to explore the board and play both sides yourself.
 
 - Connect via SSH and play chess against other players
 - Real-time multiplayer with matchmaking
+- Play against Zander with selectable engine levels (0–20)
 - Beautiful terminal UI with pixel art-inspired colors
 - Legal move validation via shakmaty
 
@@ -43,6 +45,39 @@ ssh -p 2222 localhost
 ```
 
 For a local-only listener, run `CHESSH_BIND_ADDR=127.0.0.1:2222 cargo run`.
+
+## Playing against Zander
+
+Build [Zander](https://github.com/rafaelcl292/zander#build-and-play) and download
+its NNUE network following its README. Then start CheSSH with absolute paths:
+
+```bash
+CHESSH_ENGINE_PATH=/path/to/zander/zig-out/bin/zander \
+CHESSH_ENGINE_EVAL_FILE=/path/to/zander/networks/nn-134a887f4c8f.nnue \
+cargo run
+```
+
+Without `CHESSH_ENGINE_PATH`, the server looks for `zander` on `PATH`.
+Without `CHESSH_ENGINE_EVAL_FILE`, Zander uses its default network location,
+relative to the server's working directory.
+
+In the lobby, select **Play computer**, press **3**, or type `/ai` (also
+`/computer`). Use **Left/Right**, **j/k**, or click **−/+** to select level
+**0–20**, then press **Enter** or click **Start game**. **Esc** returns to the
+menu. Level 0 is the weakest setting; 20 is the strongest. These are Zander's
+native `Skill Level` settings, not Elo estimates. You play White.
+
+Each game runs a separate UCI process with one thread, a 16 MiB hash table and
+one second of search per move. NNUE and other engine allocations use additional
+memory. Search runs asynchronously; leaving, resigning or disconnecting releases
+the process. Engine errors return you to the lobby and are logged on the server.
+Computer games, like practice boards, are not archived and do not support draw offers.
+
+To run the optional real-engine test, set the two environment variables above and run:
+
+```bash
+cargo test --locked real_zander -- --ignored
+```
 
 ## Deployment
 
@@ -76,7 +111,7 @@ games with result `*` and reason `Server shutdown`.
 
 Navigate the lobby with **j/k**, **Up/Down**, or **Tab**. Press **l**, **Right**,
 or **Enter** to open an option; **h**, **Left**, or **Esc** returns from help or
-cancels matchmaking. Number keys **1–4** open menu options directly. Practice mode
+cancels matchmaking. Number keys **1–5** open menu options directly. Practice mode
 lets you control both sides; it does not include an AI opponent.
 
 You can also click menu options. On the board, click a piece to see its legal
@@ -84,7 +119,7 @@ moves, then click a destination. Click the selected piece again to deselect it.
 Pawn promotion opens a chooser: click a piece or press **q/r/b/n**, with **Esc**
 to cancel. Mouse input requires a terminal that forwards SGR mouse events over SSH.
 
-The `/play`, `/solo`, and `/quit` commands remain available from the lobby.
+The `/play`, `/solo`, `/ai`, and `/quit` commands remain available from the lobby.
 Enter moves in SAN (`Nf3`, `O-O`, `a8=Q`) or UCI (`g1f3`, `e1g1`, `a7a8q`).
 During a game, click the action buttons or use **F2** (resign), **F3** (offer or
 accept a draw), **F4** (lobby), and **F5** (disconnect). Resignation and draw actions

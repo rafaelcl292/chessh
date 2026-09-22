@@ -32,6 +32,7 @@ pub enum GameOverReason {
 pub enum AppAction {
     None,
     JoinQueue,
+    StartComputer(u8),
     LeaveQueue,
     Quit,
     SubmitMove(Square, Square),
@@ -50,6 +51,9 @@ pub struct App {
     draw_received: bool,
     lobby_selection: usize,
     lobby_help: bool,
+    computer_setup: bool,
+    engine_level: u8,
+    computer: bool,
     input_buffer: String,
     online_count: usize,
     queue_size: usize,
@@ -77,6 +81,9 @@ impl App {
             draw_received: false,
             lobby_selection: 0,
             lobby_help: false,
+            computer_setup: false,
+            engine_level: 5,
+            computer: false,
             input_buffer: String::new(),
             online_count: 0,
             queue_size: 0,
@@ -108,6 +115,15 @@ impl App {
         } else {
             false
         }
+    }
+
+    pub fn is_computer(&self) -> bool {
+        self.computer
+    }
+
+    pub fn start_computer_game(&mut self, level: u8) {
+        self.start_game_with_mode(format!("Zander · Level {level}"), false, false);
+        self.computer = true;
     }
 
     pub fn is_multiplayer(&self) -> bool {
@@ -164,6 +180,8 @@ impl App {
         self.opponent_name = opponent;
         self.is_black_player = is_black;
         self.is_multiplayer = multiplayer;
+        self.computer = false;
+        self.computer_setup = false;
         self.clear_highlights();
         self.game_over_reason = None;
         self.input_buffer.clear();
@@ -219,6 +237,7 @@ impl App {
         self.game = None;
         self.selected_square = None;
         self.is_multiplayer = false;
+        self.computer = false;
         self.opponent_name.clear();
         self.input_buffer.clear();
         self.game_over_reason = None;
@@ -405,7 +424,23 @@ impl App {
         }
         match self.view {
             AppView::Lobby => {
-                if self.lobby_help {
+                if self.computer_setup {
+                    let inner = LobbyView::menu_inner(self.area);
+                    if inner.contains((x, y).into()) {
+                        match y.saturating_sub(inner.y) {
+                            4 => {
+                                if x < inner.x + inner.width / 2 {
+                                    self.engine_level = self.engine_level.saturating_sub(1);
+                                } else {
+                                    self.engine_level = (self.engine_level + 1).min(20);
+                                }
+                            }
+                            6 => return AppAction::StartComputer(self.engine_level),
+                            8 => self.computer_setup = false,
+                            _ => {}
+                        }
+                    }
+                } else if self.lobby_help {
                     let inner = LobbyView::menu_inner(self.area);
                     if inner.contains((x, y).into()) && y == inner.bottom().saturating_sub(1) {
                         self.lobby_help = false;
@@ -423,7 +458,7 @@ impl App {
                 }
             }
             AppView::Game => {
-                if self.is_multiplayer && !self.is_my_turn() {
+                if (self.is_multiplayer || self.computer) && !self.is_my_turn() {
                     return AppAction::None;
                 }
                 if !self.promotion.is_empty() {
@@ -504,6 +539,20 @@ impl App {
     }
 
     fn handle_lobby_input(&mut self, key: KeyCode) -> AppAction {
+        if self.computer_setup {
+            match key {
+                KeyCode::Left | KeyCode::Down | KeyCode::Char('h' | 'j') => {
+                    self.engine_level = self.engine_level.saturating_sub(1)
+                }
+                KeyCode::Right | KeyCode::Up | KeyCode::Char('l' | 'k') => {
+                    self.engine_level = (self.engine_level + 1).min(20)
+                }
+                KeyCode::Enter => return AppAction::StartComputer(self.engine_level),
+                KeyCode::Esc => self.computer_setup = false,
+                _ => {}
+            }
+            return AppAction::None;
+        }
         if self.lobby_help {
             if matches!(
                 key,
@@ -516,17 +565,17 @@ impl App {
         if self.input_buffer.is_empty() {
             match key {
                 KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
-                    self.lobby_selection = (self.lobby_selection + 1) % 4;
+                    self.lobby_selection = (self.lobby_selection + 1) % 5;
                     return AppAction::None;
                 }
                 KeyCode::Up | KeyCode::BackTab | KeyCode::Char('k') => {
-                    self.lobby_selection = (self.lobby_selection + 3) % 4;
+                    self.lobby_selection = (self.lobby_selection + 4) % 5;
                     return AppAction::None;
                 }
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
                     return self.activate_lobby_selection()
                 }
-                KeyCode::Char(c @ '1'..='4') => {
+                KeyCode::Char(c @ '1'..='5') => {
                     self.lobby_selection = (c as u8 - b'1') as usize;
                     return self.activate_lobby_selection();
                 }
@@ -548,6 +597,10 @@ impl App {
                 self.input_buffer.clear();
 
                 match cmd.as_str() {
+                    "/computer" | "/ai" => {
+                        self.computer_setup = true;
+                        AppAction::None
+                    }
                     "/play" | "play" | "/p" => AppAction::JoinQueue,
                     "/solo" | "solo" | "/s" => {
                         self.start_solo_game();
@@ -559,7 +612,7 @@ impl App {
                     }
                     _ => {
                         self.status_message =
-                            Some("Unknown command. Use the menu or /play, /solo, /quit.".into());
+                            Some("Unknown command. Use /play, /solo, /ai, /quit.".into());
                         AppAction::None
                     }
                 }
@@ -581,6 +634,10 @@ impl App {
                 AppAction::None
             }
             2 => {
+                self.computer_setup = true;
+                AppAction::None
+            }
+            3 => {
                 self.lobby_help = true;
                 AppAction::None
             }
@@ -660,6 +717,10 @@ impl App {
                     return AppAction::None;
                 }
 
+                if self.computer && !self.is_my_turn() {
+                    self.set_status(Some("Zander is thinking...".into()));
+                    return AppAction::None;
+                }
                 if let Some(game) = &self.game {
                     let matching_moves = self.find_matching_san_moves(game.position(), &input);
 
@@ -667,7 +728,7 @@ impl App {
                         let mv = matching_moves[0];
                         let san_str = San::from_move(game.position(), mv).to_string();
 
-                        if self.is_multiplayer {
+                        if self.is_multiplayer || self.computer {
                             self.clear_highlights();
                             return AppAction::SubmitMoveText(san_str);
                         }
@@ -682,7 +743,7 @@ impl App {
                     }
                 }
 
-                if self.is_multiplayer {
+                if self.is_multiplayer || self.computer {
                     self.clear_highlights();
                     return AppAction::SubmitMoveText(input);
                 }
@@ -961,6 +1022,7 @@ impl App {
             searching: self.view == AppView::InQueue,
             selected: self.lobby_selection,
             help: self.lobby_help,
+            computer_level: self.computer_setup.then_some(self.engine_level),
             command: &self.input_buffer,
             status: self.status_message.as_deref(),
         }
@@ -989,6 +1051,7 @@ impl App {
                     self.highlight_origins.clone(),
                     self.highlight_destinations.clone(),
                 )
+                .computer(self.computer)
                 .perspective(self.is_black_player)
                 .input(self.input_buffer.clone(), is_my_turn, self.is_multiplayer);
 
@@ -1039,6 +1102,45 @@ mod tests {
     }
 
     #[test]
+    fn computer_level_selection_clamps_and_guards_engine_turn() {
+        let mut app = App::new("player".into());
+        key(&mut app, KeyCode::Char('3'));
+        assert!(app.computer_setup);
+        for _ in 0..30 {
+            key(&mut app, KeyCode::Left);
+        }
+        assert_eq!(key(&mut app, KeyCode::Enter), AppAction::StartComputer(0));
+        for _ in 0..30 {
+            key(&mut app, KeyCode::Right);
+        }
+        assert_eq!(key(&mut app, KeyCode::Enter), AppAction::StartComputer(20));
+        app.start_computer_game(20);
+        app.game_mut().unwrap().play_uci("e2e4").unwrap();
+        for c in "e5".chars() {
+            key(&mut app, KeyCode::Char(c));
+        }
+        assert_eq!(key(&mut app, KeyCode::Enter), AppAction::None);
+        assert_eq!(app.game().unwrap().move_count(), 1);
+        assert_eq!(key(&mut app, KeyCode::F(4)), AppAction::ReturnToLobby);
+        app.return_to_lobby();
+        assert!(!app.is_computer());
+    }
+
+    #[test]
+    fn computer_level_mouse_controls_match_rendered_rows() {
+        let mut app = App::new("player".into());
+        app.set_area(Rect::new(0, 0, 80, 24));
+        key(&mut app, KeyCode::Char('3'));
+        let inner = LobbyView::menu_inner(app.area);
+        app.handle_input(InputEvent::Click(inner.right() - 1, inner.y + 4));
+        assert_eq!(app.engine_level, 6);
+        assert_eq!(
+            app.handle_input(InputEvent::Click(inner.x + 2, inner.y + 6)),
+            AppAction::StartComputer(6)
+        );
+    }
+
+    #[test]
     fn lobby_keyboard_navigation_help_practice_and_queue() {
         let mut app = App::new("player".into());
         assert_eq!(key(&mut app, KeyCode::Enter), AppAction::JoinQueue);
@@ -1046,21 +1148,21 @@ mod tests {
         assert_eq!(key(&mut app, KeyCode::Enter), AppAction::LeaveQueue);
         app.leave_queue();
         key(&mut app, KeyCode::Up);
-        assert_eq!(app.lobby_selection, 3);
+        assert_eq!(app.lobby_selection, 4);
         key(&mut app, KeyCode::Tab);
         key(&mut app, KeyCode::Char('j'));
         key(&mut app, KeyCode::Char('l'));
         assert_eq!(app.view(), AppView::Game);
         assert!(!app.is_multiplayer());
         app.return_to_lobby();
-        key(&mut app, KeyCode::Char('3'));
+        key(&mut app, KeyCode::Char('4'));
         assert!(app.lobby_help);
         key(&mut app, KeyCode::Char('1'));
         assert_eq!(app.view(), AppView::Lobby);
         key(&mut app, KeyCode::Char('h'));
         assert!(!app.lobby_help);
         key(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.lobby_selection, 1);
+        assert_eq!(app.lobby_selection, 2);
         for c in "/solo".chars() {
             key(&mut app, KeyCode::Char(c));
         }
@@ -1078,6 +1180,7 @@ mod tests {
             for label in [
                 "Play online",
                 "Practice board",
+                "Play computer",
                 "How to play",
                 "Disconnect",
                 "Enter",

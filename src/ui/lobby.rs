@@ -17,6 +17,7 @@ pub struct LobbyView<'a> {
     pub searching: bool,
     pub selected: usize,
     pub help: bool,
+    pub computer_level: Option<u8>,
     pub command: &'a str,
     pub status: Option<&'a str>,
 }
@@ -52,9 +53,15 @@ impl LobbyView<'_> {
             return None;
         }
         let row = y.checked_sub(inner.y + 2)?;
-        let step = if inner.height < 17 { 2 } else { 3 };
+        let step = if inner.height < 12 {
+            1
+        } else if inner.height < 19 {
+            2
+        } else {
+            3
+        };
         let index = row / step;
-        (index < 4 && row % step < step - 1).then_some(index as usize)
+        (index < 5 && (step == 1 || row % step < step - 1)).then_some(index as usize)
     }
 }
 
@@ -138,7 +145,7 @@ impl Widget for LobbyView<'_> {
             });
         let inner = Self::menu_inner(area);
         block.render(body, buf);
-        let compact = inner.height < 17;
+        let compact = inner.height < 19;
         let mut lines = vec![];
         if self.searching {
             lines.extend([
@@ -158,6 +165,20 @@ impl Widget for LobbyView<'_> {
                     Style::default().fg(ACCENT),
                 )),
             ]);
+        } else if let Some(level) = self.computer_level {
+            lines.extend([
+                Line::from("  Play against Zander"),
+                Line::from(""),
+                Line::from("  You play White. Level 0–20."),
+                Line::from(""),
+                Line::from(format!("  [-]      Level {level:2}      [+]")),
+                Line::from(""),
+                Line::from("  Start game [Enter]"),
+                Line::from(""),
+                Line::from("  Back [Esc]"),
+                Line::from(""),
+                Line::from("  ←/→ or j/k to change level"),
+            ]);
         } else if self.help {
             lines.extend([
                 Line::from(Span::styled(
@@ -167,6 +188,7 @@ impl Widget for LobbyView<'_> {
                 Line::from(""),
                 Line::from("  Online: get matched with another player."),
                 Line::from("  Practice: control both sides. No AI."),
+                Line::from("  Computer: Zander, levels 0–20 (/ai)."),
                 Line::from(""),
                 Line::from("  Type a move, then press Enter:"),
                 Line::from("  e4 · Nf3 · O-O  or  e2e4"),
@@ -187,6 +209,7 @@ impl Widget for LobbyView<'_> {
             for (index, (label, description)) in [
                 ("Play online", "Find another player and start a game"),
                 ("Practice board", "Explore moves and play both sides"),
+                ("Play computer", "Challenge Zander · choose level 0–20"),
                 ("How to play", "A quick guide to your first game"),
                 ("Disconnect", "See you next time"),
             ]
@@ -217,7 +240,9 @@ impl Widget for LobbyView<'_> {
                         Style::default().fg(MUTED),
                     )));
                 }
-                lines.push(Line::from(""));
+                if inner.height >= 12 {
+                    lines.push(Line::from(""));
+                }
             }
             if let Some(status) = self.status {
                 lines.push(Line::from(Span::styled(
@@ -251,7 +276,7 @@ impl Widget for LobbyView<'_> {
         } else if content.width < 60 {
             "j/k ↑↓ select   l/Enter open   h back".into()
         } else {
-            "j/k ↑↓ Tab  select   l/Enter →  open   h/←  back   1–4  shortcuts".into()
+            "j/k ↑↓ Tab  select   l/Enter →  open   h/←  back   1–5  shortcuts".into()
         };
         Paragraph::new(footer)
             .style(Style::default().fg(MUTED))

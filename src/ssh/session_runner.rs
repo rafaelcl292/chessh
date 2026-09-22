@@ -17,6 +17,8 @@ pub struct SessionRunner {
     game_event_rx: mpsc::UnboundedReceiver<GameEvent>,
     width: u16,
     height: u16,
+    engine: Option<crate::engine::EngineWorker>,
+    engine_pending: bool,
 }
 
 impl SessionRunner {
@@ -37,6 +39,8 @@ impl SessionRunner {
             game_event_rx,
             width,
             height,
+            engine: None,
+            engine_pending: false,
         }
     }
 
@@ -85,6 +89,23 @@ impl SessionRunner {
             }
 
             tokio::select! {
+                reply = async { self.engine.as_mut().unwrap().replies.recv().await }, if self.engine.is_some() => {
+                    dirty = true;
+                    match reply {
+                        Some(Ok(None)) => { if !self.engine_pending { app.set_status(None); } }
+                        Some(Ok(Some(mv))) => {
+                            self.engine_pending = false;
+                            let result = app.game_mut().ok_or_else(|| "No active game".to_string()).and_then(|game| game.play_uci(&mv));
+                            match result {
+                                Ok(()) => { app.update_game(app.game().unwrap().clone()); self.handle_action(&mut app, AppAction::None, &mut current_game_id).await; }
+                                Err(error) => self.engine_failed(&mut app, error),
+                            }
+                        }
+                        Some(Err(error)) => self.engine_failed(&mut app, error),
+                        None => self.engine_failed(&mut app, "Engine disconnected".into()),
+                    }
+                }
+
                 input = self.input_rx.recv() => {
                     match input {
                         Some(data) => {
@@ -134,6 +155,7 @@ impl SessionRunner {
             }
         }
 
+        self.engine = None;
         self.session_manager
             .write()
             .await
@@ -151,6 +173,16 @@ impl SessionRunner {
         info!("Session runner ended for {}", self.session_id);
     }
 
+    fn engine_failed(&mut self, app: &mut App, error: String) {
+        tracing::warn!(%error, "Zander unavailable");
+        self.engine = None;
+        self.engine_pending = false;
+        app.return_to_lobby();
+        app.set_status(Some(
+            "Zander unavailable. Ask the server admin to check engine configuration.".into(),
+        ));
+    }
+
     async fn handle_action(
         &mut self,
         app: &mut App,
@@ -158,6 +190,12 @@ impl SessionRunner {
         current_game_id: &mut Option<u64>,
     ) {
         match action {
+            AppAction::StartComputer(level) => {
+                self.engine = Some(crate::engine::EngineWorker::start(level));
+                self.engine_pending = false;
+                app.start_computer_game(level);
+                app.set_status(Some("Starting Zander...".into()));
+            }
             AppAction::JoinQueue => {
                 let mut manager = self.session_manager.write().await;
                 manager.join_queue(self.session_id);
@@ -183,9 +221,16 @@ impl SessionRunner {
                     {
                         app.set_status(Some(error));
                     }
-                } else if let Some(game) = app.game_mut() {
-                    game.resign(game.turn());
-                    app.finish_game("Resignation".to_string());
+                } else {
+                    let computer = app.is_computer();
+                    if let Some(game) = app.game_mut() {
+                        game.resign(if computer {
+                            shakmaty::Color::White
+                        } else {
+                            game.turn()
+                        });
+                        app.finish_game("Resignation".to_string());
+                    }
                 }
             }
             AppAction::OfferDraw => {
@@ -240,16 +285,32 @@ impl SessionRunner {
                 }
             }
         }
+        if !app.is_computer() || app.view() != AppView::Game || app.should_quit() {
+            self.engine = None;
+            self.engine_pending = false;
+        } else if !app.is_my_turn() && !self.engine_pending {
+            if let (Some(engine), Some(game)) = (&self.engine, app.game()) {
+                if engine.positions.try_send(game.clone()).is_ok() {
+                    self.engine_pending = true;
+                    app.set_status(Some("Zander is thinking...".into()));
+                } else {
+                    self.engine_failed(app, "Engine request channel unavailable".into());
+                }
+            }
+        }
     }
 
     async fn submit_move(&self, app: &mut App, game_id: Option<u64>, text: &str) {
+        if app.is_computer() && !app.is_my_turn() {
+            return;
+        }
         let result = if let Some(id) = game_id {
             self.session_manager
                 .write()
                 .await
                 .submit_move(self.session_id, id, text)
         } else if let Some(game) = app.game_mut() {
-            game.play_uci(text)
+            game.play_uci(text).or_else(|_| game.play_san(text))
         } else {
             return;
         };
@@ -318,6 +379,23 @@ mod tests {
             80,
             24,
         )
+    }
+
+    #[tokio::test]
+    async fn resigning_on_engine_turn_is_a_human_loss() {
+        let mut runner = runner();
+        let mut app = App::new("player".into());
+        app.start_computer_game(5);
+        app.game_mut().unwrap().play_uci("e2e4").unwrap();
+        runner
+            .handle_action(&mut app, AppAction::Resign, &mut None)
+            .await;
+        assert_eq!(
+            app.game().unwrap().result(),
+            crate::chess::GameResult::WhiteResigned
+        );
+        assert_eq!(app.view(), AppView::GameOver);
+        assert!(runner.engine.is_none());
     }
 
     #[tokio::test]

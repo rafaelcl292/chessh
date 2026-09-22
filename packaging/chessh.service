@@ -11,6 +11,8 @@ StateDirectory=chessh
 StateDirectoryMode=0700
 Environment=CHESSH_HOST_KEY=/var/lib/chessh/host_key
 Environment=CHESSH_HISTORY_PATH=/var/lib/chessh/game_history.jsonl
+Environment=CHESSH_ENGINE_PATH=/usr/local/bin/zander
+Environment=CHESSH_ENGINE_EVAL_FILE=/usr/local/share/zander/nn-134a887f4c8f.nnue
 ExecStart=/usr/local/bin/chessh
 Restart=on-failure
 RestartSec=3

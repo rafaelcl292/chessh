@@ -42,6 +42,21 @@ sudo journalctl -u chessh -n 100 --no-pager
 sudo systemctl restart chessh
 ```
 
+## Zander engine
+
+The service expects `/usr/local/bin/zander` and the NNUE network at
+`/usr/local/share/zander/nn-134a887f4c8f.nnue`. Build Zander locally for ARM64
+(`zig build -Doptimize=ReleaseFast -Dnnue-backend=auto -Dtarget=aarch64-linux-musl
+-Dcpu=baseline`), then install the executable with mode `0755` and the network
+with mode `0644`. Both must be readable by the `chessh` service account. Keep
+Zander's license, credits and source revision alongside the network.
+
+The corresponding `CHESSH_ENGINE_PATH` and `CHESSH_ENGINE_EVAL_FILE` variables
+are set in the systemd unit. Install these assets before deploying the service.
+Each computer game starts a separate engine process inside the service's CPU
+and memory limits. Verify an actual engine reply over SSH after deployment,
+as the SSH listener check alone does not exercise Zander.
+
 ## Release checks
 
 Run formatting, tests and Clippy locally, then cross-compile for the host:
