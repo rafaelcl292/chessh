@@ -53,7 +53,7 @@ its NNUE network following its README. Then start CheSSH with absolute paths:
 
 ```bash
 CHESSH_ENGINE_PATH=/path/to/zander/zig-out/bin/zander \
-CHESSH_ENGINE_EVAL_FILE=/path/to/zander/networks/nn-134a887f4c8f.nnue \
+CHESSH_ENGINE_EVAL_FILE=/path/to/zander/networks/nn-252f33942263.nnue \
 cargo run
 ```
 

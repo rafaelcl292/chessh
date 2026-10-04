@@ -45,7 +45,7 @@ sudo systemctl restart chessh
 ## Zander engine
 
 The service expects `/usr/local/bin/zander` and the NNUE network at
-`/usr/local/share/zander/nn-134a887f4c8f.nnue`. Build Zander locally for ARM64
+`/usr/local/share/zander/nn-252f33942263.nnue`. Build Zander locally for ARM64
 (`zig build -Doptimize=ReleaseFast -Dnnue-backend=auto -Dtarget=aarch64-linux-musl
 -Dcpu=baseline`), then install the executable with mode `0755` and the network
 with mode `0644`. Both must be readable by the `chessh` service account. Keep
