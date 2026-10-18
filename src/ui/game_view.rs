@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, Paragraph, Widget};
 use shakmaty::{Chess, Position, Role};
 
-use super::board::BoardWidget;
+use super::board::{BoardWidget, PieceStyle};
 use super::controls::{self, panel, GameControl, ACCENT, BG, MUTED, TEXT};
 
 pub struct GameView<'a> {
@@ -24,6 +24,7 @@ pub struct GameView<'a> {
     is_multiplayer: bool,
     computer: bool,
     finished: Option<String>,
+    piece_style: PieceStyle,
 }
 
 fn captured_pieces(position: &Chess, color: shakmaty::Color) -> Vec<Role> {
@@ -83,7 +84,13 @@ impl<'a> GameView<'a> {
             is_multiplayer: false,
             computer: false,
             finished: None,
+            piece_style: PieceStyle::default(),
         }
+    }
+
+    pub fn piece_style(mut self, style: PieceStyle) -> Self {
+        self.piece_style = style;
+        self
     }
 
     pub fn finished(mut self, result: String) -> Self {
@@ -273,6 +280,7 @@ impl Widget for GameView<'_> {
         }
 
         let mut board = BoardWidget::new(self.position)
+            .piece_style(self.piece_style)
             .selected(self.selected_square)
             .flipped(self.is_black_perspective)
             .highlights(

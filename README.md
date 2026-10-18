@@ -136,6 +136,28 @@ with the result and move history. Moves are disabled so you can inspect the posi
 for as long as you like. Press **Enter** to return to the lobby and start another
 game, or **Q** to disconnect.
 
+## Piece styles and macOS Terminal
+
+Use `/pieces unicode` in the lobby or during a game to display chess symbols
+instead of block sprites. Use `/pieces sprites` to restore the default. The choice
+lasts for your SSH session, including subsequent games, and only affects your
+display. Switching styles keeps the board size and mouse targets unchanged.
+
+Sprites require at least **82×41 cells for the board area alone**, plus room for
+the surrounding panels. Smaller layouts automatically use Unicode pieces.
+
+If sprites look striped in macOS Terminal.app with SF Mono, use
+`/pieces unicode`. Solid sprite cells use background fills, but mixed pixel cells
+still depend on the font's half-block glyphs. Changing fonts may help.
+
+On MacBooks, use **fn + F2–F5**, or enable “Use F1, F2, etc. keys as standard
+function keys” in System Settings → Keyboard. You can also type `/resign`,
+`/draw`, `/lobby`, or `/quit` during a game.
+
+For click-to-move in Terminal.app, enable **View → Allow Mouse Reporting**
+(**⌘R**). Text selection while reporting is enabled depends on your profile and
+modifier keys.
+
 ## Tests
 
 ```bash

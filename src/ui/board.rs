@@ -19,6 +19,13 @@ const CANDIDATE_ORIGIN_DARK: Color = Color::Rgb(150, 130, 90);
 const WHITE_PIECE: Color = Color::Rgb(255, 255, 255);
 const BLACK_PIECE: Color = Color::Rgb(0, 0, 0);
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PieceStyle {
+    #[default]
+    Sprites,
+    Unicode,
+}
+
 pub struct BoardWidget<'a> {
     position: &'a Chess,
     selected_square: Option<Square>,
@@ -26,6 +33,7 @@ pub struct BoardWidget<'a> {
     legal_moves: Vec<Square>,
     candidate_origins: Vec<Square>,
     flipped: bool,
+    piece_style: PieceStyle,
 }
 
 impl<'a> BoardWidget<'a> {
@@ -37,7 +45,13 @@ impl<'a> BoardWidget<'a> {
             legal_moves: Vec::new(),
             candidate_origins: Vec::new(),
             flipped: false,
+            piece_style: PieceStyle::default(),
         }
+    }
+
+    pub fn piece_style(mut self, style: PieceStyle) -> Self {
+        self.piece_style = style;
+        self
     }
 
     pub fn selected(mut self, square: Option<Square>) -> Self {
@@ -224,7 +238,7 @@ impl Widget for BoardWidget<'_> {
                 }
 
                 if let Some(piece) = self.position.board().piece_at(square) {
-                    if use_sprites {
+                    if use_sprites && self.piece_style == PieceStyle::Sprites {
                         if let Some(sprite) = get_sprite(piece.color, piece.role) {
                             let half_blocks = render_sprite_half_blocks(sprite, bg_color);
                             for (row_idx, row) in half_blocks.iter().enumerate() {
@@ -252,6 +266,43 @@ impl Widget for BoardWidget<'_> {
                                 .set_char(piece_char)
                                 .set_fg(piece_color)
                                 .set_bg(bg_color);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unicode_pieces_keep_geometry_and_mouse_targets_at_all_sizes() {
+        let position = Chess::default();
+        for area in [Rect::new(0, 0, 82, 41), Rect::new(3, 2, 34, 17)] {
+            for flipped in [false, true] {
+                let mut buf = Buffer::empty(area);
+                BoardWidget::new(&position)
+                    .piece_style(PieceStyle::Unicode)
+                    .flipped(flipped)
+                    .render(area, &mut buf);
+                assert!(buf
+                    .content
+                    .iter()
+                    .all(|cell| !matches!(cell.symbol(), "▀" | "▄" | "█")));
+                let (left, top, width, height, _) = BoardWidget::geometry(area).unwrap();
+                for row in 0..8 {
+                    for col in 0..8 {
+                        let x = left + col * width + width / 2;
+                        let y = top + row * height + height / 2;
+                        let square = BoardWidget::square_at(area, x, y, flipped).unwrap();
+                        if let Some(piece) = position.board().piece_at(square) {
+                            assert_eq!(
+                                buf[(x, y)].symbol(),
+                                BoardWidget::piece_char(piece.role, piece.color).to_string()
+                            );
                         }
                     }
                 }

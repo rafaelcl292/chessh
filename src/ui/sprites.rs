@@ -190,9 +190,9 @@ pub fn render_sprite_half_blocks(sprite: &Sprite, bg_color: Color) -> Vec<Vec<Ha
                 (false, false) => {
                     if pixels_similar(&top_pixel, &bottom_pixel) {
                         HalfBlockPixel {
-                            char: '█',
+                            char: ' ',
                             fg: rgb_to_ansi(top_pixel[0], top_pixel[1], top_pixel[2]),
-                            bg: bg_color,
+                            bg: rgb_to_ansi(top_pixel[0], top_pixel[1], top_pixel[2]),
                         }
                     } else {
                         HalfBlockPixel {
@@ -220,4 +220,36 @@ fn pixels_similar(a: &Rgb<u8>, b: &Rgb<u8>) -> bool {
         + (a[1] as i32 - b[1] as i32).abs()
         + (a[2] as i32 - b[2] as i32).abs()) as u32;
     diff < 30
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn solid_pairs_use_background_fills() {
+        for bottom in [Rgb([100, 110, 120]), Rgb([105, 115, 125])] {
+            let sprite = Sprite {
+                width: 1,
+                height: 2,
+                pixels: vec![Rgb([100, 110, 120]), bottom],
+            };
+            let rendered = render_sprite_half_blocks(&sprite, Color::Red);
+            assert_eq!(rendered[0][0].char, ' ');
+            assert_eq!(rendered[0][0].bg, Color::Rgb(100, 110, 120));
+        }
+    }
+
+    #[test]
+    fn all_assets_render_without_full_block_glyphs() {
+        let cache = SpriteCache::load().unwrap();
+        for row in &cache.sprites {
+            for sprite in row {
+                assert!(render_sprite_half_blocks(sprite, Color::Red)
+                    .iter()
+                    .flatten()
+                    .all(|cell| cell.char != '█'));
+            }
+        }
+    }
 }

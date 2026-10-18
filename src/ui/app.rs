@@ -8,6 +8,7 @@ use shakmaty::{Move, Position, Role, Square};
 
 use crate::chess::{Game, GameResult};
 
+use super::board::PieceStyle;
 use super::controls::{self, GameControl};
 use super::game_view::GameView;
 use super::lobby::LobbyView;
@@ -44,6 +45,7 @@ pub enum AppAction {
 
 pub struct App {
     view: AppView,
+    piece_style: PieceStyle,
     area: Rect,
     promotion: Vec<Move>,
     confirmation: Option<GameControl>,
@@ -74,6 +76,7 @@ impl App {
     pub fn new(username: String) -> Self {
         Self {
             view: AppView::Lobby,
+            piece_style: PieceStyle::default(),
             area: Rect::default(),
             promotion: Vec::new(),
             confirmation: None,
@@ -532,6 +535,25 @@ impl App {
         AppAction::None
     }
 
+    fn handle_piece_style_command(&mut self, input: &str) -> bool {
+        let mut words = input.split_whitespace();
+        if words.next() != Some("/pieces") {
+            return false;
+        }
+        let style = match (words.next(), words.next()) {
+            (Some("sprites"), None) => Some(PieceStyle::Sprites),
+            (Some("unicode"), None) => Some(PieceStyle::Unicode),
+            _ => None,
+        };
+        self.status_message = Some(if let Some(style) = style {
+            self.piece_style = style;
+            format!("Piece style: {}", input.split_whitespace().nth(1).unwrap())
+        } else {
+            "Usage: /pieces <sprites|unicode>".into()
+        });
+        true
+    }
+
     fn handle_lobby_input(&mut self, key: KeyCode) -> AppAction {
         if self.computer_setup {
             match key {
@@ -590,6 +612,10 @@ impl App {
                 let cmd = self.input_buffer.trim().to_lowercase();
                 self.input_buffer.clear();
 
+                if self.handle_piece_style_command(&cmd) {
+                    return AppAction::None;
+                }
+
                 match cmd.as_str() {
                     "/computer" | "/ai" => {
                         self.computer_setup = true;
@@ -606,7 +632,7 @@ impl App {
                     }
                     _ => {
                         self.status_message =
-                            Some("Unknown command. Use /play, /solo, /ai, /quit.".into());
+                            Some("Unknown command. Use /play, /solo, /ai, /pieces, /quit.".into());
                         AppAction::None
                     }
                 }
@@ -694,6 +720,11 @@ impl App {
                 self.input_buffer.clear();
 
                 if input.is_empty() {
+                    return AppAction::None;
+                }
+
+                if self.handle_piece_style_command(&input.to_lowercase()) {
+                    self.clear_highlights();
                     return AppAction::None;
                 }
 
@@ -1039,6 +1070,7 @@ impl App {
             let is_my_turn = self.is_my_turn();
 
             let mut view = GameView::new(game.position(), game.san_history())
+                .piece_style(self.piece_style)
                 .players(white_name, black_name)
                 .selected(self.selected_square)
                 .highlights(
@@ -1093,6 +1125,39 @@ mod tests {
 
     fn key(app: &mut App, code: KeyCode) -> AppAction {
         app.handle_input(InputEvent::Key(code, KeyModifiers::NONE))
+    }
+
+    #[test]
+    fn piece_style_commands_are_session_local_and_preserve_play() {
+        fn command(app: &mut App, text: &str) {
+            for c in text.chars() {
+                assert_eq!(key(app, KeyCode::Char(c)), AppAction::None);
+            }
+            assert_eq!(key(app, KeyCode::Enter), AppAction::None);
+        }
+        let mut app = App::new("player".into());
+        command(&mut app, "/pieces unicode");
+        assert_eq!(app.piece_style, PieceStyle::Unicode);
+        command(&mut app, "/solo");
+        assert_eq!(app.piece_style, PieceStyle::Unicode);
+        command(&mut app, "/pieces invalid");
+        assert_eq!(app.piece_style, PieceStyle::Unicode);
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("Usage: /pieces <sprites|unicode>")
+        );
+        command(&mut app, "/pieces sprites extra");
+        assert_eq!(app.piece_style, PieceStyle::Unicode);
+        command(&mut app, "/pieces sprites");
+        assert_eq!(app.piece_style, PieceStyle::Sprites);
+        command(&mut app, "e4");
+        assert_eq!(app.game.as_ref().unwrap().san_history(), &["e4"]);
+        command(&mut app, "/pieces unicode");
+        app.start_game_with_mode("opponent".into(), true, true);
+        assert_eq!(app.piece_style, PieceStyle::Unicode);
+        command(&mut app, "/pieces sprites");
+        assert!(app.game.as_ref().unwrap().san_history().is_empty());
+        assert_eq!(App::new("other".into()).piece_style, PieceStyle::Sprites);
     }
 
     #[test]
